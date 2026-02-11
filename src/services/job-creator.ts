@@ -14,14 +14,23 @@ interface JobConfig {
   readonly githubToken: string
 }
 
-export function createJobCreator(env: Env) {
+const TTL_AFTER_FINISHED_SECONDS = 3600
+const BACKOFF_LIMIT = 0
+const CPU_REQUEST = "500m"
+const MEMORY_REQUEST = "512Mi"
+const CPU_LIMIT = "2"
+const MEMORY_LIMIT = "2Gi"
+const SESSION_ID_SLUG_LENGTH = 8
+
+const createJobCreator = (env: Env) => {
   const kc = new k8s.KubeConfig()
   kc.loadFromDefault()
   const batchApi = kc.makeApiClient(k8s.BatchV1Api)
 
   return {
-    async createRunnerJob(config: JobConfig): Promise<string> {
-      const jobName = `claude-runner-${config.sessionId.slice(0, 8)}`
+    createRunnerJob: async (config: JobConfig): Promise<string> => {
+      const jobName = `claude-runner-${config.sessionId.slice(0, SESSION_ID_SLUG_LENGTH)}`
+      const branchArg = config.repoBranch ? `--branch ${config.repoBranch}` : ""
 
       const job: k8s.V1Job = {
         apiVersion: "batch/v1",
@@ -37,8 +46,8 @@ export function createJobCreator(env: Env) {
         },
         spec: {
           activeDeadlineSeconds: config.deadlineSeconds,
-          ttlSecondsAfterFinished: 3600,
-          backoffLimit: 0,
+          ttlSecondsAfterFinished: TTL_AFTER_FINISHED_SECONDS,
+          backoffLimit: BACKOFF_LIMIT,
           template: {
             metadata: {
               labels: {
@@ -54,7 +63,11 @@ export function createJobCreator(env: Env) {
                   image: "alpine/git:latest",
                   command: ["sh", "-c"],
                   args: [
-                    `git clone --depth 1 ${config.repoBranch ? `--branch ${config.repoBranch}` : ""} https://x-access-token:${config.githubToken}@${config.repoUrl.replace("https://", "")} /workspace`,
+                    // Token passed via env var, not in URL
+                    `git clone --depth 1 ${branchArg} https://x-access-token:$GIT_TOKEN@${config.repoUrl.replace("https://", "")} /workspace`,
+                  ],
+                  env: [
+                    { name: "GIT_TOKEN", value: config.githubToken },
                   ],
                   volumeMounts: [
                     { name: "workspace", mountPath: "/workspace" },
@@ -81,17 +94,14 @@ export function createJobCreator(env: Env) {
                         },
                       },
                     },
-                    {
-                      name: "GITHUB_TOKEN",
-                      value: config.githubToken,
-                    },
+                    { name: "GITHUB_TOKEN", value: config.githubToken },
                   ],
                   volumeMounts: [
                     { name: "workspace", mountPath: "/workspace" },
                   ],
                   resources: {
-                    requests: { cpu: "500m", memory: "512Mi" },
-                    limits: { cpu: "2", memory: "2Gi" },
+                    requests: { cpu: CPU_REQUEST, memory: MEMORY_REQUEST },
+                    limits: { cpu: CPU_LIMIT, memory: MEMORY_LIMIT },
                   },
                 },
               ],
@@ -111,7 +121,7 @@ export function createJobCreator(env: Env) {
       return jobName
     },
 
-    async deleteJob(jobName: string): Promise<void> {
+    deleteJob: async (jobName: string): Promise<void> => {
       await batchApi.deleteNamespacedJob({
         name: jobName,
         namespace: env.RUNNER_NAMESPACE,
@@ -119,19 +129,20 @@ export function createJobCreator(env: Env) {
       })
     },
 
-    async getJobStatus(jobName: string) {
+    getJobStatus: async (jobName: string) => {
       const response = await batchApi.readNamespacedJob({
         name: jobName,
         namespace: env.RUNNER_NAMESPACE,
       })
-      const job = response
       return {
-        active: job.status?.active ?? 0,
-        succeeded: job.status?.succeeded ?? 0,
-        failed: job.status?.failed ?? 0,
+        active: response.status?.active ?? 0,
+        succeeded: response.status?.succeeded ?? 0,
+        failed: response.status?.failed ?? 0,
       }
     },
   }
 }
 
-export type JobCreator = ReturnType<typeof createJobCreator>
+type JobCreator = ReturnType<typeof createJobCreator>
+
+export { type JobConfig, type JobCreator, createJobCreator }

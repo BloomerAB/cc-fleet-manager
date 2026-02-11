@@ -6,17 +6,26 @@ import type { GitHubAppService } from "../services/github-app.js"
 import type { WsManager } from "../services/ws-manager.js"
 import type { Env } from "../env.js"
 
+const MAX_PROMPT_LENGTH = 10000
+const MAX_TURNS_LIMIT = 200
+const MIN_BUDGET_USD = 0.01
+const MAX_BUDGET_USD = 50
+const MAX_PAGE_SIZE = 100
+const DEFAULT_MAX_TURNS = 50
+const DEFAULT_MAX_BUDGET_USD = 5.0
+const DEFAULT_DEADLINE_SECONDS = 3600
+
 const createTaskSchema = z.object({
-  prompt: z.string().min(1).max(10000),
+  prompt: z.string().min(1).max(MAX_PROMPT_LENGTH),
   repoUrl: z.string().url(),
   repoBranch: z.string().optional(),
-  maxTurns: z.number().int().min(1).max(200).optional(),
-  maxBudgetUsd: z.number().min(0.01).max(50).optional(),
+  maxTurns: z.number().int().min(1).max(MAX_TURNS_LIMIT).optional(),
+  maxBudgetUsd: z.number().min(MIN_BUDGET_USD).max(MAX_BUDGET_USD).optional(),
 })
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(20),
   status: z.string().optional(),
 })
 
@@ -25,14 +34,14 @@ interface JwtPayload {
   readonly login: string
 }
 
-export function registerTaskRoutes(
+const registerTaskRoutes = (
   app: FastifyInstance,
   env: Env,
   sessionStore: SessionStore,
   jobCreator: JobCreator,
   githubApp: GitHubAppService,
   wsManager: WsManager,
-) {
+) => {
   // Auth hook for all task routes
   app.addHook("onRequest", async (request, reply) => {
     try {
@@ -42,7 +51,7 @@ export function registerTaskRoutes(
     }
   })
 
-  // POST /api/tasks — create a new task
+  // POST /api/tasks -- create a new task
   app.post("/api/tasks", async (request) => {
     const body = createTaskSchema.parse(request.body)
     const user = request.user as JwtPayload
@@ -67,9 +76,9 @@ export function registerTaskRoutes(
       prompt: body.prompt,
       repoUrl: body.repoUrl,
       repoBranch: body.repoBranch,
-      maxTurns: session.maxTurns ?? 50,
-      maxBudgetUsd: session.maxBudgetUsd ?? 5.0,
-      deadlineSeconds: session.deadlineSeconds ?? 3600,
+      maxTurns: session.maxTurns ?? DEFAULT_MAX_TURNS,
+      maxBudgetUsd: session.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
+      deadlineSeconds: session.deadlineSeconds ?? DEFAULT_DEADLINE_SECONDS,
       managerWsUrl: `ws://session-manager.${env.RUNNER_NAMESPACE}.svc.cluster.local:${env.PORT}/ws/runner`,
       githubToken,
     })
@@ -86,7 +95,7 @@ export function registerTaskRoutes(
     return { success: true, data: { ...session, jobName } }
   })
 
-  // GET /api/tasks — list user's tasks
+  // GET /api/tasks -- list user's tasks
   app.get("/api/tasks", async (request) => {
     const query = listQuerySchema.parse(request.query)
     const user = request.user as JwtPayload
@@ -107,7 +116,7 @@ export function registerTaskRoutes(
     }
   })
 
-  // GET /api/tasks/:id — get task details
+  // GET /api/tasks/:id -- get task details
   app.get("/api/tasks/:id", async (request, reply) => {
     const { id } = request.params as { id: string }
     const user = request.user as JwtPayload
@@ -120,7 +129,7 @@ export function registerTaskRoutes(
     return { success: true, data: session }
   })
 
-  // POST /api/tasks/:id/cancel — cancel a task
+  // POST /api/tasks/:id/cancel -- cancel a task
   app.post("/api/tasks/:id/cancel", async (request, reply) => {
     const { id } = request.params as { id: string }
     const user = request.user as JwtPayload
@@ -158,7 +167,7 @@ export function registerTaskRoutes(
     return { success: true, data: { cancelled: true } }
   })
 
-  // GET /api/tasks/:id/messages — get session messages
+  // GET /api/tasks/:id/messages -- get session messages
   app.get("/api/tasks/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string }
     const user = request.user as JwtPayload
@@ -172,3 +181,5 @@ export function registerTaskRoutes(
     return { success: true, data: messages }
   })
 }
+
+export { registerTaskRoutes }

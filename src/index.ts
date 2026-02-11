@@ -13,16 +13,12 @@ import { registerAuthRoutes } from "./routes/auth.js"
 import { registerTaskRoutes } from "./routes/tasks.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
 
-async function main() {
+const main = async () => {
   const env = loadEnv()
 
   const app = Fastify({
     logger: {
       level: "info",
-      transport: {
-        target: "pino-pretty",
-        options: { translateTime: "HH:MM:ss" },
-      },
     },
   })
 
@@ -32,7 +28,11 @@ async function main() {
   await app.register(fastifyWebsocket)
 
   // Database
-  const sql = postgres(env.DATABASE_URL)
+  const sql = postgres(env.DATABASE_URL, {
+    max: 10,
+    idle_timeout: 20,
+    connect_timeout: 30,
+  })
   const db = drizzle(sql)
 
   // Services
@@ -48,6 +48,17 @@ async function main() {
 
   // Health check
   app.get("/healthz", async () => ({ status: "ok" }))
+
+  // Graceful shutdown
+  const shutdown = async (signal: string) => {
+    app.log.info(`Received ${signal}, shutting down gracefully`)
+    await app.close()
+    await sql.end()
+    process.exit(0)
+  }
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"))
+  process.on("SIGINT", () => shutdown("SIGINT"))
 
   // Start
   await app.listen({ port: env.PORT, host: env.HOST })

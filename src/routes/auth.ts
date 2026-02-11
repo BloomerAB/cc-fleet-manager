@@ -8,20 +8,28 @@ const callbackSchema = z.object({
   state: z.string(),
 })
 
-// In-memory state store (sufficient for single-instance MVP; use Redis for multi-replica)
-const pendingStates = new Map<string, { createdAt: number }>()
+const STATE_TTL_MS = 10 * 60 * 1000
+const STATE_BYTES = 16
+const JWT_EXPIRY = "7d"
 
-export function registerAuthRoutes(app: FastifyInstance, env: Env) {
+// In-memory state store (sufficient for single-instance MVP; use Redis for multi-replica)
+const pendingStates = new Map<string, { readonly createdAt: number }>()
+
+const cleanupExpiredStates = () => {
+  const cutoff = Date.now() - STATE_TTL_MS
+  for (const [key, val] of pendingStates) {
+    if (val.createdAt < cutoff) pendingStates.delete(key)
+  }
+}
+
+const registerAuthRoutes = (app: FastifyInstance, env: Env) => {
   // Initiate GitHub OIDC login
   app.get("/api/auth/github", async (_request, reply) => {
-    const state = crypto.randomBytes(16).toString("hex")
+    const state = crypto.randomBytes(STATE_BYTES).toString("hex")
     pendingStates.set(state, { createdAt: Date.now() })
 
-    // Clean up old states (> 10 min)
-    const cutoff = Date.now() - 10 * 60 * 1000
-    for (const [key, val] of pendingStates) {
-      if (val.createdAt < cutoff) pendingStates.delete(key)
-    }
+    // Clean up old states
+    cleanupExpiredStates()
 
     const params = new URLSearchParams({
       client_id: env.GITHUB_CLIENT_ID,
@@ -33,11 +41,11 @@ export function registerAuthRoutes(app: FastifyInstance, env: Env) {
     return reply.redirect(`https://github.com/login/oauth/authorize?${params}`)
   })
 
-  // GitHub OAuth callback — exchange code for token, fetch user, issue JWT
+  // GitHub OAuth callback -- exchange code for token, fetch user, issue JWT
   app.post("/api/auth/github/callback", async (request, reply) => {
     const body = callbackSchema.parse(request.body)
 
-    // Validate state
+    // Validate and consume state
     if (!pendingStates.has(body.state)) {
       return reply.status(400).send({ success: false, error: "Invalid state parameter" })
     }
@@ -94,7 +102,7 @@ export function registerAuthRoutes(app: FastifyInstance, env: Env) {
         login: ghUser.login,
         avatarUrl: ghUser.avatar_url,
       },
-      { expiresIn: "7d" }
+      { expiresIn: JWT_EXPIRY }
     )
 
     return {
@@ -110,3 +118,5 @@ export function registerAuthRoutes(app: FastifyInstance, env: Env) {
     }
   })
 }
+
+export { registerAuthRoutes }

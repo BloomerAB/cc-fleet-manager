@@ -2,26 +2,26 @@ import type { FastifyInstance } from "fastify"
 import type { WebSocket } from "ws"
 import type { WsManager } from "../services/ws-manager.js"
 import type { SessionStore } from "../services/session-store.js"
-import type {
-  RunnerMessage,
-  DashboardToManagerMessage,
-} from "@bloomer-ab/claude-types"
+import { parseRunnerMessage, parseDashboardMessage } from "../services/ws-manager.js"
 
 interface JwtPayload {
   readonly sub: string
   readonly login: string
 }
 
-export function registerSessionRoutes(
+const WS_CLOSE_MISSING_PARAM = 4000
+const WS_CLOSE_AUTH_FAILED = 4001
+
+const registerSessionRoutes = (
   app: FastifyInstance,
   wsManager: WsManager,
   sessionStore: SessionStore,
-) {
+) => {
   // WebSocket endpoint for runners
   app.get("/ws/runner", { websocket: true }, (socket, request) => {
     const sessionId = (request.query as Record<string, string>).sessionId
     if (!sessionId) {
-      socket.close(4000, "Missing sessionId query parameter")
+      socket.close(WS_CLOSE_MISSING_PARAM, "Missing sessionId query parameter")
       return
     }
 
@@ -29,13 +29,16 @@ export function registerSessionRoutes(
 
     socket.on("message", async (raw: Buffer) => {
       try {
-        const message = JSON.parse(raw.toString()) as RunnerMessage
+        const message = parseRunnerMessage(raw.toString())
 
-        // Look up the session to find the userId for broadcasting
-        // Runner authenticates via the sessionId (runner is in-cluster, trusted)
-        const sessions = await sessionStore.findByUser("*", 1, 0)
-        // We need a method to find by session ID without userId filter
-        // For now, store messages and broadcast based on the runner's session
+        // Look up session to get userId for broadcasting (runner is in-cluster, trusted)
+        const session = await sessionStore.findByIdUnsafe(sessionId)
+        if (!session) {
+          app.log.warn({ sessionId }, "Runner message for unknown session")
+          return
+        }
+
+        const { userId } = session
 
         switch (message.type) {
           case "sdk_message": {
@@ -45,35 +48,78 @@ export function registerSessionRoutes(
               message.message.content,
               message.message.toolName,
             )
-            // We need the userId — get it from DB
+            wsManager.broadcastToDashboards(sessionId, userId, {
+              type: "output",
+              sessionId,
+              text: message.message.content,
+              toolName: message.message.toolName,
+              timestamp: message.message.timestamp,
+            })
             break
           }
           case "question": {
             await sessionStore.updateStatus(sessionId, "waiting_for_input")
+            wsManager.broadcastToDashboards(sessionId, userId, {
+              type: "session_update",
+              sessionId,
+              status: "waiting_for_input",
+            })
+            wsManager.broadcastToDashboards(sessionId, userId, {
+              type: "question",
+              sessionId,
+              questions: message.questions,
+            })
             break
           }
           case "status": {
             if (message.status === "running") {
               await sessionStore.updateStatus(sessionId, "running")
+              wsManager.broadcastToDashboards(sessionId, userId, {
+                type: "session_update",
+                sessionId,
+                status: "running",
+              })
             } else if (message.status === "completed") {
-              await sessionStore.updateStatus(sessionId, "completed", {
-                result: message.result ? {
-                  success: message.result.success,
-                  summary: message.result.summary,
-                  prUrl: message.result.prUrl,
-                  costUsd: message.result.costUsd,
-                  turnsUsed: message.result.turnsUsed,
-                } : undefined,
+              const result = message.result ? {
+                success: message.result.success,
+                summary: message.result.summary,
+                prUrl: message.result.prUrl,
+                costUsd: message.result.costUsd,
+                turnsUsed: message.result.turnsUsed,
+              } : undefined
+              await sessionStore.updateStatus(sessionId, "completed", { result })
+              wsManager.broadcastToDashboards(sessionId, userId, {
+                type: "session_update",
+                sessionId,
+                status: "completed",
               })
+              if (result) {
+                wsManager.broadcastToDashboards(sessionId, userId, {
+                  type: "result",
+                  sessionId,
+                  result,
+                })
+              }
             } else if (message.status === "failed") {
-              await sessionStore.updateStatus(sessionId, "failed", {
-                result: message.result ? {
-                  success: false,
-                  summary: message.result.summary,
-                  costUsd: message.result.costUsd,
-                  turnsUsed: message.result.turnsUsed,
-                } : undefined,
+              const result = message.result ? {
+                success: false,
+                summary: message.result.summary,
+                costUsd: message.result.costUsd,
+                turnsUsed: message.result.turnsUsed,
+              } : undefined
+              await sessionStore.updateStatus(sessionId, "failed", { result })
+              wsManager.broadcastToDashboards(sessionId, userId, {
+                type: "session_update",
+                sessionId,
+                status: "failed",
               })
+              if (result) {
+                wsManager.broadcastToDashboards(sessionId, userId, {
+                  type: "result",
+                  sessionId,
+                  result,
+                })
+              }
             }
             break
           }
@@ -89,7 +135,7 @@ export function registerSessionRoutes(
     // Verify JWT from query param (WebSocket can't use headers easily)
     const token = (request.query as Record<string, string>).token
     if (!token) {
-      socket.close(4001, "Missing token")
+      socket.close(WS_CLOSE_AUTH_FAILED, "Missing token")
       return
     }
 
@@ -97,7 +143,7 @@ export function registerSessionRoutes(
     try {
       user = app.jwt.verify(token) as JwtPayload
     } catch {
-      socket.close(4001, "Invalid token")
+      socket.close(WS_CLOSE_AUTH_FAILED, "Invalid token")
       return
     }
 
@@ -105,7 +151,7 @@ export function registerSessionRoutes(
 
     socket.on("message", (raw: Buffer) => {
       try {
-        const message = JSON.parse(raw.toString()) as DashboardToManagerMessage
+        const message = parseDashboardMessage(raw.toString())
 
         switch (message.type) {
           case "subscribe": {
@@ -135,3 +181,5 @@ export function registerSessionRoutes(
     })
   })
 }
+
+export { registerSessionRoutes }
