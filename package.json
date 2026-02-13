@@ -14,8 +14,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "lint": "eslint src",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:init": "cqlsh -f src/db/schema.cql",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -25,15 +24,14 @@
     "@fastify/jwt": "^9.0.0",
     "@fastify/websocket": "^11.0.0",
     "@kubernetes/client-node": "^1.0.0",
-    "drizzle-orm": "^0.39.0",
+    "cassandra-driver": "^4.8.0",
     "fastify": "^5.2.0",
-    "postgres": "^3.4.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
-    "drizzle-kit": "^0.30.0",
+    "@types/cassandra-driver": "^3.6.0",
     "eslint": "^9.0.0",
     "prettier": "^3.4.0",
     "tsc-alias": "^1.8.0",

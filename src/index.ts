@@ -2,9 +2,8 @@ import Fastify from "fastify"
 import fastifyWebsocket from "@fastify/websocket"
 import fastifyCors from "@fastify/cors"
 import fastifyJwt from "@fastify/jwt"
-import { drizzle } from "drizzle-orm/postgres-js"
-import postgres from "postgres"
 import { loadEnv } from "./env.js"
+import { createDbClient } from "./db/client.js"
 import { createSessionStore } from "./services/session-store.js"
 import { createJobCreator } from "./services/job-creator.js"
 import { createGitHubAppService } from "./services/github-app.js"
@@ -28,15 +27,11 @@ const main = async () => {
   await app.register(fastifyWebsocket)
 
   // Database
-  const sql = postgres(env.DATABASE_URL, {
-    max: 10,
-    idle_timeout: 20,
-    connect_timeout: 30,
-  })
-  const db = drizzle(sql)
+  const db = createDbClient(env)
+  await db.connect()
 
   // Services
-  const sessionStore = createSessionStore(db)
+  const sessionStore = createSessionStore(db.client)
   const jobCreator = createJobCreator(env)
   const githubApp = createGitHubAppService(env)
   const wsManager = createWsManager()
@@ -53,7 +48,7 @@ const main = async () => {
   const shutdown = async (signal: string) => {
     app.log.info(`Received ${signal}, shutting down gracefully`)
     await app.close()
-    await sql.end()
+    await db.disconnect()
     process.exit(0)
   }
 

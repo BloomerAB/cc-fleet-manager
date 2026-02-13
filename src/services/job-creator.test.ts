@@ -32,14 +32,17 @@ import type { JobConfig } from "./job-creator.js"
 const createMockEnv = (overrides: Partial<Env> = {}): Env => ({
   PORT: 3000,
   HOST: "0.0.0.0",
-  DATABASE_URL: "postgresql://localhost/test",
+  SCYLLA_HOST: "scylla",
+  SCYLLA_PORT: 9042,
+  SCYLLA_DATACENTER: "datacenter1",
+  SCYLLA_KEYSPACE: "claude_platform",
   JWT_SECRET: "test-secret",
   GITHUB_CLIENT_ID: "client-id",
   GITHUB_CLIENT_SECRET: "client-secret",
   GITHUB_APP_ID: "12345",
   GITHUB_APP_PRIVATE_KEY: "private-key",
   GITHUB_APP_INSTALLATION_ID: "67890",
-  RUNNER_IMAGE: "ghcr.io/bloomer-ab/claude-agent-runner:latest",
+  RUNNER_IMAGE: "ghcr.io/bloomerab/claude-agent-runner:latest",
   RUNNER_NAMESPACE: "claude-platform",
   ANTHROPIC_API_KEY: "sk-ant-test",
   CORS_ORIGIN: "http://localhost:5173",
@@ -161,7 +164,7 @@ describe("createJobCreator", () => {
       const container = job.spec.template.spec.containers[0]
 
       expect(container.name).toBe("runner")
-      expect(container.image).toBe("ghcr.io/bloomer-ab/claude-agent-runner:latest")
+      expect(container.image).toBe("ghcr.io/bloomerab/claude-agent-runner:latest")
 
       const envMap = new Map(
         container.env

@@ -2,7 +2,6 @@ import { describe, it, expect, vi, afterEach } from "vitest"
 import { loadEnv } from "./env.js"
 
 const REQUIRED_ENV_VARS = {
-  DATABASE_URL: "postgresql://localhost/test",
   JWT_SECRET: "test-secret",
   GITHUB_CLIENT_ID: "client-id",
   GITHUB_CLIENT_SECRET: "client-secret",
@@ -16,7 +15,11 @@ const ALL_ENV_VARS = {
   ...REQUIRED_ENV_VARS,
   PORT: "3000",
   HOST: "0.0.0.0",
-  RUNNER_IMAGE: "ghcr.io/bloomer-ab/claude-agent-runner:latest",
+  SCYLLA_HOST: "scylla",
+  SCYLLA_PORT: "9042",
+  SCYLLA_DATACENTER: "datacenter1",
+  SCYLLA_KEYSPACE: "claude_platform",
+  RUNNER_IMAGE: "ghcr.io/bloomerab/claude-agent-runner:latest",
   RUNNER_NAMESPACE: "claude-platform",
   CORS_ORIGIN: "http://localhost:5173",
 }
@@ -30,7 +33,6 @@ describe("loadEnv", () => {
     vi.stubGlobal("process", { ...process, env: { ...ALL_ENV_VARS } })
 
     const env = loadEnv()
-    expect(env.DATABASE_URL).toBe("postgresql://localhost/test")
     expect(env.JWT_SECRET).toBe("test-secret")
     expect(env.GITHUB_CLIENT_ID).toBe("client-id")
     expect(env.GITHUB_CLIENT_SECRET).toBe("client-secret")
@@ -58,7 +60,28 @@ describe("loadEnv", () => {
     vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
 
     const env = loadEnv()
-    expect(env.RUNNER_IMAGE).toBe("ghcr.io/bloomer-ab/claude-agent-runner:latest")
+    expect(env.RUNNER_IMAGE).toBe("ghcr.io/bloomerab/claude-agent-runner:latest")
+  })
+
+  it("should apply default SCYLLA_HOST", () => {
+    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
+
+    const env = loadEnv()
+    expect(env.SCYLLA_HOST).toBe("scylla")
+  })
+
+  it("should apply default SCYLLA_PORT", () => {
+    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
+
+    const env = loadEnv()
+    expect(env.SCYLLA_PORT).toBe(9042)
+  })
+
+  it("should apply default SCYLLA_KEYSPACE", () => {
+    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
+
+    const env = loadEnv()
+    expect(env.SCYLLA_KEYSPACE).toBe("claude_platform")
   })
 
   it("should apply default RUNNER_NAMESPACE", () => {
@@ -105,14 +128,6 @@ describe("loadEnv", () => {
     expect(env.RUNNER_IMAGE).toBe("custom:v2")
     expect(env.RUNNER_NAMESPACE).toBe("my-ns")
     expect(env.CORS_ORIGIN).toBe("https://app.example.com")
-  })
-
-  it("should throw when DATABASE_URL is missing", () => {
-    const { DATABASE_URL, ...rest } = REQUIRED_ENV_VARS
-    vi.stubGlobal("process", { ...process, env: { ...rest } })
-
-    expect(() => loadEnv()).toThrow("Missing environment variables")
-    expect(() => loadEnv()).toThrow("DATABASE_URL")
   })
 
   it("should throw when JWT_SECRET is missing", () => {
