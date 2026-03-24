@@ -1,6 +1,6 @@
 import { types as cassandraTypes } from "cassandra-driver"
 import type { Client } from "cassandra-driver"
-import type { SessionStatus, SessionResult } from "@bloomer-ab/claude-types"
+import type { SessionStatus, SessionResult } from "@bloomerab/claude-types"
 
 interface CreateSessionInput {
   readonly userId: string

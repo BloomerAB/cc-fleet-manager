@@ -5,7 +5,7 @@ import type {
   ManagerToRunnerMessage,
   ManagerToDashboardMessage,
   DashboardToManagerMessage,
-} from "@bloomer-ab/claude-types"
+} from "@bloomerab/claude-types"
 
 interface RunnerConnection {
   readonly ws: WebSocket
