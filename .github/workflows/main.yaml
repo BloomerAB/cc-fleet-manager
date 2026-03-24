@@ -45,6 +45,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Get latest UI image digest
+        id: ui
+        run: |
+          digest=$(docker buildx imagetools inspect ghcr.io/bloomerab/cc-fleet-ui:latest --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "digest=${digest}" >> $GITHUB_OUTPUT
+
       - name: Generate tag
         id: tag
         run: echo "tag=$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
@@ -58,5 +64,7 @@ jobs:
           tags: |
             ghcr.io/bloomerab/cc-fleet-manager:latest
             ghcr.io/bloomerab/cc-fleet-manager:${{ steps.tag.outputs.tag }}
+          build-args: |
+            UI_IMAGE=ghcr.io/bloomerab/cc-fleet-ui@${{ steps.ui.outputs.digest }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

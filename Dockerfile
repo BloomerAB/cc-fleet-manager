@@ -1,5 +1,6 @@
-# Pull pre-built dashboard from cc-fleet-ui image
-FROM ghcr.io/bloomerab/cc-fleet-ui:latest AS dashboard
+# Pull pre-built dashboard assets from cc-fleet-ui image
+ARG UI_IMAGE=ghcr.io/bloomerab/cc-fleet-ui:latest
+FROM ${UI_IMAGE} AS dashboard
 
 # NPM stage (all deps for build)
 FROM node:24-alpine AS npm
