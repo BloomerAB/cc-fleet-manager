@@ -24,7 +24,7 @@ const createDbClient = (env: Env) => {
         host.setMaxListeners(20)
       })
     } catch (error) {
-      throw new Error(`Failed to connect to ScyllaDB: ${error}`)
+      throw new Error(`Failed to connect to ScyllaDB: ${error}`, { cause: error })
     }
   }
 
