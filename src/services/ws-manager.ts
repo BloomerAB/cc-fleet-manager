@@ -3,7 +3,7 @@ import type { WebSocket } from "ws"
 import type {
   ManagerToDashboardMessage,
   DashboardToManagerMessage,
-} from "@bloomerab/cc-fleet-types"
+} from "../types/index.js"
 
 interface DashboardConnection {
   readonly ws: WebSocket

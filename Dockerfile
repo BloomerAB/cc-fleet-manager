@@ -1,20 +1,16 @@
 # Dashboard build stage
 FROM node:24-alpine AS dashboard
 WORKDIR /dashboard
-ARG NPM_TOKEN
 ARG DASHBOARD_REPO=https://github.com/BloomerAB/cc-fleet-ui.git
 ARG DASHBOARD_REF=main
 RUN apk add --no-cache git \
-    && REPO_HOST=$(echo "${DASHBOARD_REPO}" | sed 's|https://||') \
-    && git clone --depth 1 --branch ${DASHBOARD_REF} \
-       "https://x-access-token:${NPM_TOKEN}@${REPO_HOST}" .
+    && git clone --depth 1 --branch ${DASHBOARD_REF} ${DASHBOARD_REPO} .
 RUN npm ci && npm run build
 
 # NPM stage (all deps for build)
 FROM node:24-alpine AS npm
 WORKDIR /app
-COPY package.json package-lock.json .npmrc ./
-ARG NPM_TOKEN
+COPY package.json package-lock.json ./
 RUN npm ci
 
 # Builder stage
@@ -28,8 +24,7 @@ RUN ./node_modules/.bin/tsc && ./node_modules/.bin/tsc-alias
 # Production deps only
 FROM node:24-alpine AS deps-prod
 WORKDIR /app
-COPY package.json package-lock.json .npmrc ./
-ARG NPM_TOKEN
+COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 # Runner stage (production)
@@ -37,7 +32,9 @@ FROM node:24-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 
-RUN addgroup -g 1001 -S nodejs && adduser -S appuser -u 1001
+RUN apk add --no-cache git \
+    && addgroup -g 1001 -S nodejs \
+    && adduser -S appuser -u 1001
 
 COPY --from=deps-prod /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
