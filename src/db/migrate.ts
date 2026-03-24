@@ -1,10 +1,19 @@
-import { readdir, readFile } from "node:fs/promises"
-import { join, dirname } from "node:path"
-import { fileURLToPath } from "node:url"
 import type { Client } from "cassandra-driver"
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const MIGRATIONS_DIR = join(__dirname, "migrations")
+interface Migration {
+  readonly version: number
+  readonly name: string
+  readonly statements: readonly string[]
+}
+
+// Add new migrations at the end. Never modify or remove existing ones.
+const migrations: readonly Migration[] = [
+  {
+    version: 1,
+    name: "001_add_repo_source",
+    statements: ["ALTER TABLE sessions ADD repo_source TEXT"],
+  },
+]
 
 const ensureVersionTable = async (client: Client): Promise<void> => {
   await client.execute(`
@@ -22,43 +31,27 @@ const getAppliedVersions = async (client: Client): Promise<ReadonlySet<number>> 
   return new Set(result.rows.map((row) => row.version as number))
 }
 
-const parseMigrationVersion = (filename: string): number | null => {
-  const match = filename.match(/^(\d+)_/)
-  return match ? parseInt(match[1], 10) : null
-}
-
 const runMigrations = async (client: Client): Promise<void> => {
   await ensureVersionTable(client)
   const applied = await getAppliedVersions(client)
 
-  const files = await readdir(MIGRATIONS_DIR).catch(() => [] as string[])
-  const cqlFiles = files.filter((f) => f.endsWith(".cql")).sort()
+  for (const migration of migrations) {
+    if (applied.has(migration.version)) continue
 
-  for (const file of cqlFiles) {
-    const version = parseMigrationVersion(file)
-    if (version === null || applied.has(version)) continue
-
-    const content = await readFile(join(MIGRATIONS_DIR, file), "utf-8")
-    const statements = content
-      .split(";")
-      .map((s) => s.replace(/--.*$/gm, "").trim())
-      .filter(Boolean)
-
-    for (const statement of statements) {
+    for (const statement of migration.statements) {
       try {
         await client.execute(statement)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        // Safe to ignore "already exists" — migration may have partially applied
         if (!message.includes("already exists") && !message.includes("conflicts with")) {
-          throw new Error(`Migration ${file} failed: ${message}`, { cause: error })
+          throw new Error(`Migration ${migration.name} failed: ${message}`, { cause: error })
         }
       }
     }
 
     await client.execute(
       "INSERT INTO schema_version (version, filename, applied_at) VALUES (?, ?, ?)",
-      [version, file, new Date()],
+      [migration.version, migration.name, new Date()],
       { prepare: true },
     )
   }
