@@ -8,8 +8,8 @@ import fastifyStatic from "@fastify/static"
 import { loadEnv } from "./env.js"
 import { createDbClient } from "./db/client.js"
 import { createSessionStore } from "./services/session-store.js"
-import { createJobCreator } from "./services/job-creator.js"
-import { createGitHubAppService } from "./services/github-app.js"
+import { createUserStore } from "./services/user-store.js"
+import { createTaskExecutor } from "./services/task-executor.js"
 import { createWsManager } from "./services/ws-manager.js"
 import { registerAuthRoutes } from "./routes/auth.js"
 import { registerTaskRoutes } from "./routes/tasks.js"
@@ -37,20 +37,20 @@ const main = async () => {
 
   // Services
   const sessionStore = createSessionStore(db.client)
-  const jobCreator = createJobCreator(env)
-  const githubApp = createGitHubAppService(env)
+  const userStore = createUserStore(db.client)
   const wsManager = createWsManager()
+  const taskExecutor = createTaskExecutor(env, sessionStore, userStore, wsManager)
 
-  // API routes
-  registerAuthRoutes(app, env)
-  registerTaskRoutes(app, env, sessionStore, jobCreator, githubApp, wsManager)
-  registerSessionRoutes(app, wsManager, sessionStore)
+  // Routes
+  registerAuthRoutes(app, env, userStore)
+  registerTaskRoutes(app, env, sessionStore, taskExecutor, wsManager)
+  registerSessionRoutes(app, wsManager, sessionStore, taskExecutor)
 
   // Health checks
   app.get("/healthz", async () => ({ status: "ok" }))
   app.get("/health", async () => ({ status: "ok" }))
 
-  // Serve dashboard SPA if public/ dir exists (built from claude-dashboard)
+  // Serve dashboard SPA if public/ dir exists
   if (existsSync(STATIC_DIR)) {
     await app.register(fastifyStatic, {
       root: STATIC_DIR,
@@ -58,7 +58,6 @@ const main = async () => {
       wildcard: false,
     })
 
-    // SPA fallback — serve index.html for non-API routes
     app.setNotFoundHandler(async (request, reply) => {
       if (
         request.url.startsWith("/api/") ||
@@ -85,7 +84,7 @@ const main = async () => {
 
   // Start
   await app.listen({ port: env.PORT, host: env.HOST })
-  app.log.info(`Session Manager listening on ${env.HOST}:${env.PORT}`)
+  app.log.info(`Claude Platform listening on ${env.HOST}:${env.PORT}`)
 }
 
 main().catch((error) => {

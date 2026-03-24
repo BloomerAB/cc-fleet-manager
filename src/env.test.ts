@@ -5,11 +5,7 @@ const REQUIRED_ENV_VARS = {
   JWT_SECRET: "test-secret",
   GITHUB_CLIENT_ID: "client-id",
   GITHUB_CLIENT_SECRET: "client-secret",
-  GITHUB_APP_ID: "12345",
-  GITHUB_APP_PRIVATE_KEY: "private-key",
-  GITHUB_APP_INSTALLATION_ID: "67890",
-  ANTHROPIC_SECRET_NAME: "anthropic-api-key",
-  ANTHROPIC_SECRET_KEY: "api-key",
+  ANTHROPIC_API_KEY: "sk-ant-test-key",
 }
 
 const ALL_ENV_VARS = {
@@ -20,8 +16,13 @@ const ALL_ENV_VARS = {
   SCYLLA_PORT: "9042",
   SCYLLA_DATACENTER: "datacenter1",
   SCYLLA_KEYSPACE: "claude_platform",
-  RUNNER_IMAGE: "ghcr.io/bloomerab/claude-agent-runner:latest",
-  RUNNER_NAMESPACE: "claude-platform",
+  SCYLLA_USERNAME: "admin",
+  SCYLLA_PASSWORD: "password",
+  GITHUB_SCOPES: "read:user,repo",
+  GIT_TOKEN: "ghp_test123",
+  MAX_CONCURRENT_TASKS: "5",
+  WORKSPACE_BASE_DIR: "/tmp/claude-workspaces",
+  ALLOWED_REPOS: "github.com/bloomerab/*",
   CORS_ORIGIN: "http://localhost:5173",
 }
 
@@ -37,11 +38,7 @@ describe("loadEnv", () => {
     expect(env.JWT_SECRET).toBe("test-secret")
     expect(env.GITHUB_CLIENT_ID).toBe("client-id")
     expect(env.GITHUB_CLIENT_SECRET).toBe("client-secret")
-    expect(env.GITHUB_APP_ID).toBe("12345")
-    expect(env.GITHUB_APP_PRIVATE_KEY).toBe("private-key")
-    expect(env.GITHUB_APP_INSTALLATION_ID).toBe("67890")
-    expect(env.ANTHROPIC_SECRET_NAME).toBe("anthropic-api-key")
-    expect(env.ANTHROPIC_SECRET_KEY).toBe("api-key")
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test-key")
   })
 
   it("should apply default PORT of 3000", () => {
@@ -56,13 +53,6 @@ describe("loadEnv", () => {
 
     const env = loadEnv()
     expect(env.HOST).toBe("0.0.0.0")
-  })
-
-  it("should apply default RUNNER_IMAGE", () => {
-    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
-
-    const env = loadEnv()
-    expect(env.RUNNER_IMAGE).toBe("ghcr.io/bloomerab/claude-agent-runner:latest")
   })
 
   it("should apply default SCYLLA_HOST", () => {
@@ -86,11 +76,32 @@ describe("loadEnv", () => {
     expect(env.SCYLLA_KEYSPACE).toBe("claude_platform")
   })
 
-  it("should apply default RUNNER_NAMESPACE", () => {
+  it("should apply default GITHUB_SCOPES", () => {
     vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
 
     const env = loadEnv()
-    expect(env.RUNNER_NAMESPACE).toBe("claude-platform")
+    expect(env.GITHUB_SCOPES).toBe("read:user,repo")
+  })
+
+  it("should apply default MAX_CONCURRENT_TASKS of 5", () => {
+    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
+
+    const env = loadEnv()
+    expect(env.MAX_CONCURRENT_TASKS).toBe(5)
+  })
+
+  it("should apply default WORKSPACE_BASE_DIR", () => {
+    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
+
+    const env = loadEnv()
+    expect(env.WORKSPACE_BASE_DIR).toBe("/tmp/claude-workspaces")
+  })
+
+  it("should apply default ALLOWED_REPOS as empty string", () => {
+    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
+
+    const env = loadEnv()
+    expect(env.ALLOWED_REPOS).toBe("")
   })
 
   it("should apply default CORS_ORIGIN", () => {
@@ -98,6 +109,21 @@ describe("loadEnv", () => {
 
     const env = loadEnv()
     expect(env.CORS_ORIGIN).toBe("http://localhost:5173")
+  })
+
+  it("should leave GIT_TOKEN as undefined when not provided", () => {
+    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
+
+    const env = loadEnv()
+    expect(env.GIT_TOKEN).toBeUndefined()
+  })
+
+  it("should leave SCYLLA_USERNAME and SCYLLA_PASSWORD as undefined when not provided", () => {
+    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
+
+    const env = loadEnv()
+    expect(env.SCYLLA_USERNAME).toBeUndefined()
+    expect(env.SCYLLA_PASSWORD).toBeUndefined()
   })
 
   it("should coerce PORT from string to number", () => {
@@ -111,6 +137,17 @@ describe("loadEnv", () => {
     expect(typeof env.PORT).toBe("number")
   })
 
+  it("should coerce MAX_CONCURRENT_TASKS from string to number", () => {
+    vi.stubGlobal("process", {
+      ...process,
+      env: { ...REQUIRED_ENV_VARS, MAX_CONCURRENT_TASKS: "10" },
+    })
+
+    const env = loadEnv()
+    expect(env.MAX_CONCURRENT_TASKS).toBe(10)
+    expect(typeof env.MAX_CONCURRENT_TASKS).toBe("number")
+  })
+
   it("should override defaults when values are provided", () => {
     vi.stubGlobal("process", {
       ...process,
@@ -118,8 +155,11 @@ describe("loadEnv", () => {
         ...REQUIRED_ENV_VARS,
         PORT: "9090",
         HOST: "127.0.0.1",
-        RUNNER_IMAGE: "custom:v2",
-        RUNNER_NAMESPACE: "my-ns",
+        GITHUB_SCOPES: "read:user",
+        GIT_TOKEN: "ghp_custom",
+        MAX_CONCURRENT_TASKS: "10",
+        WORKSPACE_BASE_DIR: "/data/workspaces",
+        ALLOWED_REPOS: "github.com/myorg/*",
         CORS_ORIGIN: "https://app.example.com",
       },
     })
@@ -127,8 +167,11 @@ describe("loadEnv", () => {
     const env = loadEnv()
     expect(env.PORT).toBe(9090)
     expect(env.HOST).toBe("127.0.0.1")
-    expect(env.RUNNER_IMAGE).toBe("custom:v2")
-    expect(env.RUNNER_NAMESPACE).toBe("my-ns")
+    expect(env.GITHUB_SCOPES).toBe("read:user")
+    expect(env.GIT_TOKEN).toBe("ghp_custom")
+    expect(env.MAX_CONCURRENT_TASKS).toBe(10)
+    expect(env.WORKSPACE_BASE_DIR).toBe("/data/workspaces")
+    expect(env.ALLOWED_REPOS).toBe("github.com/myorg/*")
     expect(env.CORS_ORIGIN).toBe("https://app.example.com")
   })
 
@@ -147,15 +190,15 @@ describe("loadEnv", () => {
     expect(() => loadEnv()).toThrow("Missing environment variables")
   })
 
-  it("should throw listing all missing vars when multiple are missing", () => {
-    vi.stubGlobal("process", { ...process, env: {} })
+  it("should throw when ANTHROPIC_API_KEY is missing", () => {
+    const { ANTHROPIC_API_KEY, ...rest } = REQUIRED_ENV_VARS
+    vi.stubGlobal("process", { ...process, env: { ...rest } })
 
     expect(() => loadEnv()).toThrow("Missing environment variables")
   })
 
-  it("should throw when GITHUB_APP_PRIVATE_KEY is missing", () => {
-    const { GITHUB_APP_PRIVATE_KEY, ...rest } = REQUIRED_ENV_VARS
-    vi.stubGlobal("process", { ...process, env: { ...rest } })
+  it("should throw listing all missing vars when multiple are missing", () => {
+    vi.stubGlobal("process", { ...process, env: {} })
 
     expect(() => loadEnv()).toThrow("Missing environment variables")
   })

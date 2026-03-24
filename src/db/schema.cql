@@ -1,22 +1,34 @@
 CREATE KEYSPACE IF NOT EXISTS claude_platform
-WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3};
+WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 
 USE claude_platform;
 
+-- Users table: stores GitHub OAuth tokens for git operations
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT,
+  github_login TEXT,
+  name TEXT,
+  email TEXT,
+  avatar_url TEXT,
+  access_token TEXT,
+  token_scopes TEXT,
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP,
+  PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS users_by_login ON users (github_login);
+
 -- Sessions table: partitioned by user_id for efficient user-scoped queries
--- Clustering by created_at DESC for natural time ordering
 CREATE TABLE IF NOT EXISTS sessions (
   user_id TEXT,
   id UUID,
-  user_login TEXT,
   status TEXT,
   prompt TEXT,
-  repo_url TEXT,
-  repo_branch TEXT,
+  repos TEXT,
   max_turns INT,
   max_budget_usd FLOAT,
   deadline_seconds INT,
-  job_name TEXT,
   result TEXT,
   created_at TIMESTAMP,
   updated_at TIMESTAMP,
@@ -25,7 +37,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   PRIMARY KEY ((user_id), created_at, id)
 ) WITH CLUSTERING ORDER BY (created_at DESC, id ASC);
 
--- Secondary index for looking up sessions by id without knowing user_id
 CREATE INDEX IF NOT EXISTS sessions_by_id ON sessions (id);
 
 -- Session messages: partitioned by session_id, clustered by created_at

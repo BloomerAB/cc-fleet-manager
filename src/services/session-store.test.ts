@@ -30,9 +30,8 @@ describe("createSessionStore", () => {
 
       const result = await store.create({
         userId: "user-1",
-        userLogin: "malin",
         prompt: "Fix the bug",
-        repoUrl: "https://github.com/org/repo",
+        repos: [{ url: "https://github.com/org/repo" }],
         maxTurns: 30,
         maxBudgetUsd: 3.0,
       })
@@ -40,10 +39,31 @@ describe("createSessionStore", () => {
       expect(mock.execute).toHaveBeenCalledOnce()
       expect(result.userId).toBe("user-1")
       expect(result.prompt).toBe("Fix the bug")
+      expect(result.repos).toEqual([{ url: "https://github.com/org/repo" }])
       expect(result.maxTurns).toBe(30)
       expect(result.maxBudgetUsd).toBe(3.0)
       expect(result.status).toBe("queued")
       expect(result.id).toBeDefined()
+    })
+
+    it("should support multiple repos", async () => {
+      mock.execute.mockResolvedValueOnce({})
+
+      const repos = [
+        { url: "https://github.com/org/repo1", branch: "main" },
+        { url: "https://github.com/org/repo2", branch: "develop" },
+      ]
+
+      const result = await store.create({
+        userId: "user-1",
+        prompt: "Fix across repos",
+        repos,
+      })
+
+      expect(result.repos).toEqual(repos)
+      // Verify repos are JSON-serialized in the CQL params
+      const params = mock.execute.mock.calls[0][1]
+      expect(params).toContain(JSON.stringify(repos))
     })
 
     it("should apply default maxTurns of 50 when not provided", async () => {
@@ -51,9 +71,8 @@ describe("createSessionStore", () => {
 
       const result = await store.create({
         userId: "user-1",
-        userLogin: "malin",
         prompt: "Do something",
-        repoUrl: "https://github.com/org/repo",
+        repos: [{ url: "https://github.com/org/repo" }],
       })
 
       expect(result.maxTurns).toBe(50)
@@ -64,42 +83,37 @@ describe("createSessionStore", () => {
 
       const result = await store.create({
         userId: "user-1",
-        userLogin: "malin",
         prompt: "Do something",
-        repoUrl: "https://github.com/org/repo",
+        repos: [{ url: "https://github.com/org/repo" }],
       })
 
       expect(result.maxBudgetUsd).toBe(5.0)
     })
 
-    it("should pass optional repoBranch", async () => {
+    it("should support repo with branch", async () => {
       mock.execute.mockResolvedValueOnce({})
 
       const result = await store.create({
         userId: "user-1",
-        userLogin: "malin",
         prompt: "Fix",
-        repoUrl: "https://github.com/org/repo",
-        repoBranch: "feature/foo",
+        repos: [{ url: "https://github.com/org/repo", branch: "feature/foo" }],
       })
 
-      expect(result.repoBranch).toBe("feature/foo")
-      // Verify repoBranch is in the CQL params
-      const params = mock.execute.mock.calls[0][1]
-      expect(params).toContain("feature/foo")
+      expect(result.repos[0].branch).toBe("feature/foo")
     })
 
-    it("should set repoBranch to null when not provided", async () => {
+    it("should set result to null initially", async () => {
       mock.execute.mockResolvedValueOnce({})
 
       const result = await store.create({
         userId: "user-1",
-        userLogin: "malin",
         prompt: "Fix",
-        repoUrl: "https://github.com/org/repo",
+        repos: [{ url: "https://github.com/org/repo" }],
       })
 
-      expect(result.repoBranch).toBeNull()
+      expect(result.result).toBeNull()
+      expect(result.startedAt).toBeNull()
+      expect(result.completedAt).toBeNull()
     })
   })
 
@@ -110,15 +124,12 @@ describe("createSessionStore", () => {
         first: () => createMockRow({
           id: uuid,
           user_id: "user-1",
-          user_login: "malin",
           status: "running",
           prompt: "Fix bug",
-          repo_url: "https://github.com/org/repo",
-          repo_branch: null,
+          repos: JSON.stringify([{ url: "https://github.com/org/repo" }]),
           max_turns: 50,
           max_budget_usd: 5.0,
           deadline_seconds: 3600,
-          job_name: "claude-runner-abc",
           result: null,
           created_at: new Date(),
           updated_at: new Date(),
@@ -132,6 +143,7 @@ describe("createSessionStore", () => {
       expect(result!.id).toBe(uuid.toString())
       expect(result!.userId).toBe("user-1")
       expect(result!.status).toBe("running")
+      expect(result!.repos).toEqual([{ url: "https://github.com/org/repo" }])
     })
 
     it("should return null when not found", async () => {
@@ -149,10 +161,9 @@ describe("createSessionStore", () => {
         first: () => createMockRow({
           id: uuid,
           user_id: "user-1",
-          user_login: "malin",
           status: "queued",
           prompt: "Fix",
-          repo_url: "https://github.com/org/repo",
+          repos: JSON.stringify([{ url: "https://github.com/org/repo" }]),
           max_turns: 50,
           max_budget_usd: 5.0,
           deadline_seconds: 3600,
@@ -184,14 +195,16 @@ describe("createSessionStore", () => {
       mock.execute.mockResolvedValueOnce({
         rows: [
           createMockRow({
-            id: uuid1, user_id: "user-1", user_login: "malin", status: "running",
-            prompt: "Fix 1", repo_url: "https://github.com/org/repo", max_turns: 50,
-            max_budget_usd: 5.0, deadline_seconds: 3600, created_at: now, updated_at: now,
+            id: uuid1, user_id: "user-1", status: "running",
+            prompt: "Fix 1", repos: JSON.stringify([{ url: "https://github.com/org/repo" }]),
+            max_turns: 50, max_budget_usd: 5.0, deadline_seconds: 3600,
+            created_at: now, updated_at: now,
           }),
           createMockRow({
-            id: uuid2, user_id: "user-1", user_login: "malin", status: "completed",
-            prompt: "Fix 2", repo_url: "https://github.com/org/repo", max_turns: 50,
-            max_budget_usd: 5.0, deadline_seconds: 3600, created_at: now, updated_at: now,
+            id: uuid2, user_id: "user-1", status: "completed",
+            prompt: "Fix 2", repos: JSON.stringify([{ url: "https://github.com/org/repo" }]),
+            max_turns: 50, max_budget_usd: 5.0, deadline_seconds: 3600,
+            created_at: now, updated_at: now,
           }),
         ],
       })
@@ -252,7 +265,7 @@ describe("createSessionStore", () => {
       expect(mock.execute).toHaveBeenCalledTimes(1) // Only the lookup
     })
 
-    it("should include jobName and result in update when provided", async () => {
+    it("should include result in update when provided", async () => {
       const uuid = cassandraTypes.Uuid.random()
       mock.execute.mockResolvedValueOnce({
         first: () => ({ user_id: "user-1", created_at: new Date() }),
@@ -260,13 +273,37 @@ describe("createSessionStore", () => {
       mock.execute.mockResolvedValueOnce({})
 
       await store.updateStatus(uuid.toString(), "completed", {
-        jobName: "claude-runner-abc",
         result: { success: true, summary: "Done" },
       })
 
       const updateQuery = mock.execute.mock.calls[1][0]
-      expect(updateQuery).toContain("job_name = ?")
       expect(updateQuery).toContain("result = ?")
+      expect(updateQuery).toContain("completed_at = ?")
+    })
+
+    it("should add started_at when status is running", async () => {
+      const uuid = cassandraTypes.Uuid.random()
+      mock.execute.mockResolvedValueOnce({
+        first: () => ({ user_id: "user-1", created_at: new Date() }),
+      })
+      mock.execute.mockResolvedValueOnce({})
+
+      await store.updateStatus(uuid.toString(), "running")
+
+      const updateQuery = mock.execute.mock.calls[1][0]
+      expect(updateQuery).toContain("started_at = ?")
+    })
+
+    it("should add completed_at when status is failed", async () => {
+      const uuid = cassandraTypes.Uuid.random()
+      mock.execute.mockResolvedValueOnce({
+        first: () => ({ user_id: "user-1", created_at: new Date() }),
+      })
+      mock.execute.mockResolvedValueOnce({})
+
+      await store.updateStatus(uuid.toString(), "failed")
+
+      const updateQuery = mock.execute.mock.calls[1][0]
       expect(updateQuery).toContain("completed_at = ?")
     })
   })

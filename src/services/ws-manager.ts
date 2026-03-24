@@ -1,64 +1,15 @@
 import { z } from "zod"
 import type { WebSocket } from "ws"
 import type {
-  RunnerMessage,
-  ManagerToRunnerMessage,
   ManagerToDashboardMessage,
   DashboardToManagerMessage,
 } from "@bloomerab/claude-types"
-
-interface RunnerConnection {
-  readonly ws: WebSocket
-  readonly sessionId: string
-}
 
 interface DashboardConnection {
   readonly ws: WebSocket
   readonly userId: string
   readonly subscribedSessions: Set<string>
 }
-
-// Zod schemas for incoming WebSocket messages
-const runnerSdkMessageSchema = z.object({
-  type: z.literal("sdk_message"),
-  message: z.object({
-    role: z.enum(["assistant", "tool"]),
-    content: z.string(),
-    toolName: z.string().optional(),
-    timestamp: z.string(),
-  }),
-})
-
-const runnerQuestionSchema = z.object({
-  type: z.literal("question"),
-  questions: z.array(z.object({
-    id: z.string(),
-    question: z.string(),
-    options: z.array(z.object({
-      label: z.string(),
-      value: z.string(),
-    })).optional(),
-    defaultAnswer: z.string().optional(),
-  })),
-})
-
-const runnerStatusSchema = z.object({
-  type: z.literal("status"),
-  status: z.enum(["running", "completed", "failed"]),
-  result: z.object({
-    success: z.boolean(),
-    summary: z.string(),
-    prUrl: z.string().optional(),
-    costUsd: z.number().optional(),
-    turnsUsed: z.number().optional(),
-  }).optional(),
-})
-
-const runnerMessageSchema = z.discriminatedUnion("type", [
-  runnerSdkMessageSchema,
-  runnerQuestionSchema,
-  runnerStatusSchema,
-])
 
 const dashboardSubscribeSchema = z.object({
   type: z.literal("subscribe"),
@@ -83,15 +34,9 @@ const dashboardMessageSchema = z.discriminatedUnion("type", [
 ])
 
 const createWsManager = () => {
-  const runners = new Map<string, RunnerConnection>()
   const dashboards = new Set<DashboardConnection>()
 
   return {
-    registerRunner: (sessionId: string, ws: WebSocket) => {
-      runners.set(sessionId, { ws, sessionId })
-      ws.on("close", () => runners.delete(sessionId))
-    },
-
     registerDashboard: (userId: string, ws: WebSocket): DashboardConnection => {
       const conn: DashboardConnection = {
         ws,
@@ -103,14 +48,7 @@ const createWsManager = () => {
       return conn
     },
 
-    sendToRunner: (sessionId: string, message: ManagerToRunnerMessage) => {
-      const runner = runners.get(sessionId)
-      if (runner && runner.ws.readyState === runner.ws.OPEN) {
-        runner.ws.send(JSON.stringify(message))
-      }
-    },
-
-    broadcastToDashboards: (sessionId: string, userId: string, message: ManagerToDashboardMessage) => {
+    emitToSession: (sessionId: string, userId: string, message: ManagerToDashboardMessage) => {
       for (const conn of dashboards) {
         if (conn.userId !== userId) continue
         if (conn.subscribedSessions.size > 0 && !conn.subscribedSessions.has(sessionId)) continue
@@ -119,20 +57,7 @@ const createWsManager = () => {
         }
       }
     },
-
-    getRunnerConnection: (sessionId: string) => {
-      return runners.get(sessionId) ?? null
-    },
-
-    isRunnerConnected: (sessionId: string) => {
-      const runner = runners.get(sessionId)
-      return runner !== undefined && runner.ws.readyState === runner.ws.OPEN
-    },
   }
-}
-
-const parseRunnerMessage = (raw: string): RunnerMessage => {
-  return runnerMessageSchema.parse(JSON.parse(raw)) as RunnerMessage
 }
 
 const parseDashboardMessage = (raw: string): DashboardToManagerMessage => {
@@ -141,4 +66,4 @@ const parseDashboardMessage = (raw: string): DashboardToManagerMessage => {
 
 type WsManager = ReturnType<typeof createWsManager>
 
-export { type WsManager, type RunnerConnection, type DashboardConnection, createWsManager, parseRunnerMessage, parseDashboardMessage }
+export { type WsManager, type DashboardConnection, createWsManager, parseDashboardMessage }

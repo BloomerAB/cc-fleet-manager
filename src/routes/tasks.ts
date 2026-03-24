@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
+import { minimatch } from "minimatch"
 import type { SessionStore } from "../services/session-store.js"
-import type { JobCreator } from "../services/job-creator.js"
-import type { GitHubAppService } from "../services/github-app.js"
+import type { TaskExecutor } from "../services/task-executor.js"
 import type { WsManager } from "../services/ws-manager.js"
 import type { Env } from "../env.js"
 
@@ -11,14 +11,16 @@ const MAX_TURNS_LIMIT = 200
 const MIN_BUDGET_USD = 0.01
 const MAX_BUDGET_USD = 50
 const MAX_PAGE_SIZE = 100
-const DEFAULT_MAX_TURNS = 50
-const DEFAULT_MAX_BUDGET_USD = 5.0
-const DEFAULT_DEADLINE_SECONDS = 3600
+const MAX_REPOS = 10
+
+const repoSchema = z.object({
+  url: z.string().url(),
+  branch: z.string().optional(),
+})
 
 const createTaskSchema = z.object({
   prompt: z.string().min(1).max(MAX_PROMPT_LENGTH),
-  repoUrl: z.string().url(),
-  repoBranch: z.string().optional(),
+  repos: z.array(repoSchema).min(1).max(MAX_REPOS),
   maxTurns: z.number().int().min(1).max(MAX_TURNS_LIMIT).optional(),
   maxBudgetUsd: z.number().min(MIN_BUDGET_USD).max(MAX_BUDGET_USD).optional(),
 })
@@ -34,68 +36,76 @@ interface JwtPayload {
   readonly login: string
 }
 
+const parseAllowedRepos = (raw: string): readonly string[] => {
+  if (!raw.trim()) return []
+  return raw.split(",").map((s) => s.trim()).filter(Boolean)
+}
+
+const isRepoAllowed = (repoUrl: string, patterns: readonly string[]): boolean => {
+  if (patterns.length === 0) return true
+  const normalized = repoUrl.replace(/^https?:\/\//, "").replace(/\.git$/, "")
+  return patterns.some((pattern) => minimatch(normalized, pattern))
+}
+
 const registerTaskRoutes = (
   app: FastifyInstance,
   env: Env,
   sessionStore: SessionStore,
-  jobCreator: JobCreator,
-  githubApp: GitHubAppService,
+  taskExecutor: TaskExecutor,
   wsManager: WsManager,
 ) => {
+  const allowedRepos = parseAllowedRepos(env.ALLOWED_REPOS)
+
   // Auth hook for all task routes
   app.addHook("onRequest", async (request, reply) => {
-    try {
-      await request.jwtVerify()
-    } catch {
-      return reply.status(401).send({ success: false, error: "Unauthorized" })
+    if (request.url.startsWith("/api/tasks")) {
+      try {
+        await request.jwtVerify()
+      } catch {
+        return reply.status(401).send({ success: false, error: "Unauthorized" })
+      }
     }
   })
 
-  // POST /api/tasks -- create a new task
-  app.post("/api/tasks", async (request) => {
+  // POST /api/tasks — create and execute a task
+  app.post("/api/tasks", async (request, reply) => {
     const body = createTaskSchema.parse(request.body)
     const user = request.user as JwtPayload
 
+    // Validate repos against allowlist
+    for (const repo of body.repos) {
+      if (!isRepoAllowed(repo.url, allowedRepos)) {
+        return reply.status(403).send({
+          success: false,
+          error: `Repository not allowed: ${repo.url}`,
+        })
+      }
+    }
+
     const session = await sessionStore.create({
       userId: user.sub,
-      userLogin: user.login,
       prompt: body.prompt,
-      repoUrl: body.repoUrl,
-      repoBranch: body.repoBranch,
+      repos: body.repos,
       maxTurns: body.maxTurns,
       maxBudgetUsd: body.maxBudgetUsd,
     })
 
-    // Get GitHub App installation token for repo cloning
-    const githubToken = await githubApp.getInstallationToken()
-
-    // Create K8s Job
-    const jobName = await jobCreator.createRunnerJob({
-      sessionId: session.id,
-      userId: user.sub,
-      prompt: body.prompt,
-      repoUrl: body.repoUrl,
-      repoBranch: body.repoBranch,
-      maxTurns: session.maxTurns ?? DEFAULT_MAX_TURNS,
-      maxBudgetUsd: session.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
-      deadlineSeconds: session.deadlineSeconds ?? DEFAULT_DEADLINE_SECONDS,
-      managerWsUrl: `ws://${env.MANAGER_SERVICE_NAME}.${env.RUNNER_NAMESPACE}.svc.cluster.local:${env.PORT}/ws/runner`,
-      githubToken,
-    })
-
-    await sessionStore.updateStatus(session.id, "queued", { jobName })
-
     // Notify dashboards
-    wsManager.broadcastToDashboards(session.id, user.sub, {
+    wsManager.emitToSession(session.id, user.sub, {
       type: "session_update",
       sessionId: session.id,
       status: "queued",
     })
 
-    return { success: true, data: { ...session, jobName } }
+    // Execute in background — don't await
+    taskExecutor.executeTask(session.id, user.sub).catch((error) => {
+      app.log.error({ error, sessionId: session.id }, "Task execution failed")
+    })
+
+    return { success: true, data: session }
   })
 
-  // GET /api/tasks -- list user's tasks
+  // GET /api/tasks — list user's tasks
   app.get("/api/tasks", async (request) => {
     const query = listQuerySchema.parse(request.query)
     const user = request.user as JwtPayload
@@ -116,7 +126,7 @@ const registerTaskRoutes = (
     }
   })
 
-  // GET /api/tasks/:id -- get task details
+  // GET /api/tasks/:id — get task details
   app.get("/api/tasks/:id", async (request, reply) => {
     const { id } = request.params as { id: string }
     const user = request.user as JwtPayload
@@ -129,7 +139,7 @@ const registerTaskRoutes = (
     return { success: true, data: session }
   })
 
-  // POST /api/tasks/:id/cancel -- cancel a task
+  // POST /api/tasks/:id/cancel — cancel a task
   app.post("/api/tasks/:id/cancel", async (request, reply) => {
     const { id } = request.params as { id: string }
     const user = request.user as JwtPayload
@@ -143,22 +153,10 @@ const registerTaskRoutes = (
       return reply.status(400).send({ success: false, error: "Task already terminated" })
     }
 
-    // Send cancel to runner
-    wsManager.sendToRunner(id, { type: "cancel" })
-
-    // Update status
+    taskExecutor.cancelTask(id)
     await sessionStore.updateStatus(id, "cancelled")
 
-    // Delete K8s Job if exists
-    if (session.jobName) {
-      try {
-        await jobCreator.deleteJob(session.jobName)
-      } catch {
-        // Job may already be gone
-      }
-    }
-
-    wsManager.broadcastToDashboards(id, user.sub, {
+    wsManager.emitToSession(id, user.sub, {
       type: "session_update",
       sessionId: id,
       status: "cancelled",
@@ -167,7 +165,7 @@ const registerTaskRoutes = (
     return { success: true, data: { cancelled: true } }
   })
 
-  // GET /api/tasks/:id/messages -- get session messages
+  // GET /api/tasks/:id/messages — get session messages
   app.get("/api/tasks/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string }
     const user = request.user as JwtPayload
@@ -182,4 +180,4 @@ const registerTaskRoutes = (
   })
 }
 
-export { registerTaskRoutes }
+export { registerTaskRoutes, isRepoAllowed, parseAllowedRepos }
