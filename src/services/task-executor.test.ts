@@ -35,7 +35,7 @@ const createMockEnv = (overrides?: Partial<Env>): Env => ({
   GITHUB_CLIENT_ID: "client-id",
   GITHUB_CLIENT_SECRET: "client-secret",
   GITHUB_SCOPES: "read:user,repo",
-  ANTHROPIC_API_KEY: "sk-ant-test",
+  ANTHROPIC_API_KEY: "sk-ant-test" as string | undefined,
   MAX_CONCURRENT_TASKS: 5,
   WORKSPACE_BASE_DIR: "/tmp/cc-fleet-workspaces",
   ALLOWED_REPOS: "",
@@ -58,6 +58,8 @@ const createMockUserStore = (): UserStore => ({
   upsert: vi.fn(),
   findById: vi.fn(),
   getAccessToken: vi.fn().mockResolvedValue("gho_user_token"),
+  getAnthropicApiKey: vi.fn().mockResolvedValue("sk-ant-user-key"),
+  setAnthropicApiKey: vi.fn(),
 })
 
 const createMockWsManager = (): WsManager => ({

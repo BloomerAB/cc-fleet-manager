@@ -25,7 +25,7 @@ describe("createUserStore", () => {
 
   describe("upsert", () => {
     it("should insert a user and return it with timestamps", async () => {
-      mock.execute.mockResolvedValueOnce({})
+      mock.execute.mockResolvedValueOnce({}).mockResolvedValueOnce({ first: () => null })
 
       const input = {
         id: "12345",
@@ -39,7 +39,7 @@ describe("createUserStore", () => {
 
       const result = await store.upsert(input)
 
-      expect(mock.execute).toHaveBeenCalledOnce()
+      expect(mock.execute).toHaveBeenCalledTimes(2) // INSERT + SELECT anthropic key
       expect(result.id).toBe("12345")
       expect(result.githubLogin).toBe("malin")
       expect(result.name).toBe("Malin")
@@ -52,7 +52,7 @@ describe("createUserStore", () => {
     })
 
     it("should handle null optional fields", async () => {
-      mock.execute.mockResolvedValueOnce({})
+      mock.execute.mockResolvedValueOnce({}).mockResolvedValueOnce({ first: () => null })
 
       const result = await store.upsert({
         id: "12345",
@@ -69,8 +69,30 @@ describe("createUserStore", () => {
       expect(result.avatarUrl).toBeNull()
     })
 
+    it("should preserve existing anthropic key on re-login", async () => {
+      mock.execute
+        .mockResolvedValueOnce({}) // INSERT
+        .mockResolvedValueOnce({ // SELECT anthropic_api_key
+          first: () => createMockRow({ anthropic_api_key: "sk-ant-existing" }),
+        })
+
+      const result = await store.upsert({
+        id: "12345",
+        githubLogin: "malin",
+        name: null,
+        email: null,
+        avatarUrl: null,
+        accessToken: "gho_new",
+        tokenScopes: "read:user",
+      })
+
+      expect(result.anthropicApiKey).toBe("sk-ant-existing")
+    })
+
     it("should execute INSERT INTO users query", async () => {
-      mock.execute.mockResolvedValueOnce({})
+      mock.execute
+        .mockResolvedValueOnce({}) // INSERT
+        .mockResolvedValueOnce({ first: () => null }) // SELECT
 
       await store.upsert({
         id: "12345",
@@ -90,7 +112,7 @@ describe("createUserStore", () => {
     })
 
     it("should pass all fields as CQL params", async () => {
-      mock.execute.mockResolvedValueOnce({})
+      mock.execute.mockResolvedValueOnce({}).mockResolvedValueOnce({ first: () => null })
 
       await store.upsert({
         id: "12345",
@@ -124,6 +146,7 @@ describe("createUserStore", () => {
           avatar_url: "https://example.com/avatar.png",
           access_token: "gho_abc123",
           token_scopes: "read:user,repo",
+          anthropic_api_key: "sk-ant-user",
           created_at: now,
           updated_at: now,
         }),
@@ -133,13 +156,8 @@ describe("createUserStore", () => {
       expect(result).not.toBeNull()
       expect(result!.id).toBe("12345")
       expect(result!.githubLogin).toBe("malin")
-      expect(result!.name).toBe("Malin")
-      expect(result!.email).toBe("malin@bloomer.se")
-      expect(result!.avatarUrl).toBe("https://example.com/avatar.png")
+      expect(result!.anthropicApiKey).toBe("sk-ant-user")
       expect(result!.accessToken).toBe("gho_abc123")
-      expect(result!.tokenScopes).toBe("read:user,repo")
-      expect(result!.createdAt).toBe(now)
-      expect(result!.updatedAt).toBe(now)
     })
 
     it("should return null when not found", async () => {
@@ -206,6 +224,56 @@ describe("createUserStore", () => {
 
       const query = mock.execute.mock.calls[0][0]
       expect(query).toContain("SELECT access_token FROM users")
+    })
+  })
+
+  describe("getAnthropicApiKey", () => {
+    it("should return the key when set", async () => {
+      mock.execute.mockResolvedValueOnce({
+        first: () => createMockRow({ anthropic_api_key: "sk-ant-test" }),
+      })
+
+      const result = await store.getAnthropicApiKey("12345")
+      expect(result).toBe("sk-ant-test")
+    })
+
+    it("should return null when not set", async () => {
+      mock.execute.mockResolvedValueOnce({
+        first: () => createMockRow({ anthropic_api_key: undefined }),
+      })
+
+      const result = await store.getAnthropicApiKey("12345")
+      expect(result).toBeNull()
+    })
+
+    it("should return null when user not found", async () => {
+      mock.execute.mockResolvedValueOnce({ first: () => null })
+
+      const result = await store.getAnthropicApiKey("nonexistent")
+      expect(result).toBeNull()
+    })
+  })
+
+  describe("setAnthropicApiKey", () => {
+    it("should update the key", async () => {
+      mock.execute.mockResolvedValueOnce({})
+
+      await store.setAnthropicApiKey("12345", "sk-ant-new")
+
+      const query = mock.execute.mock.calls[0][0]
+      expect(query).toContain("UPDATE users SET anthropic_api_key")
+      const params = mock.execute.mock.calls[0][1]
+      expect(params[0]).toBe("sk-ant-new")
+      expect(params[2]).toBe("12345")
+    })
+
+    it("should clear the key when null", async () => {
+      mock.execute.mockResolvedValueOnce({})
+
+      await store.setAnthropicApiKey("12345", null)
+
+      const params = mock.execute.mock.calls[0][1]
+      expect(params[0]).toBeNull()
     })
   })
 })

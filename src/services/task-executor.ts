@@ -31,6 +31,13 @@ const createTaskExecutor = (
     return env.GIT_TOKEN || null
   }
 
+  const getAnthropicKey = async (userId: string): Promise<string> => {
+    const userKey = await userStore.getAnthropicApiKey(userId)
+    if (userKey) return userKey
+    if (env.ANTHROPIC_API_KEY) return env.ANTHROPIC_API_KEY
+    throw new Error("No Anthropic API key configured. Set your key in Settings.")
+  }
+
   const cloneRepos = async (
     repos: readonly RepoConfig[],
     workspaceDir: string,
@@ -154,7 +161,11 @@ const createTaskExecutor = (
       })
 
       const gitToken = await getGitToken(userId)
+      const anthropicKey = await getAnthropicKey(userId)
       await cloneRepos(session.repos, workspaceDir, gitToken)
+
+      // SDK reads ANTHROPIC_API_KEY from env
+      process.env.ANTHROPIC_API_KEY = anthropicKey
 
       const result = query({
         prompt: session.prompt,

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_url TEXT,
   access_token TEXT,
   token_scopes TEXT,
+  anthropic_api_key TEXT,
   created_at TIMESTAMP,
   updated_at TIMESTAMP,
   PRIMARY KEY (id)

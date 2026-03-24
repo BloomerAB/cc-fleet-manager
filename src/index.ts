@@ -14,6 +14,7 @@ import { createWsManager } from "./services/ws-manager.js"
 import { registerAuthRoutes } from "./routes/auth.js"
 import { registerTaskRoutes } from "./routes/tasks.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
+import { registerSettingsRoutes } from "./routes/settings.js"
 
 const STATIC_DIR = join(import.meta.dirname, "../public")
 
@@ -45,6 +46,7 @@ const main = async () => {
   registerAuthRoutes(app, env, userStore)
   registerTaskRoutes(app, env, sessionStore, taskExecutor, wsManager)
   registerSessionRoutes(app, wsManager, sessionStore, taskExecutor)
+  registerSettingsRoutes(app, userStore)
 
   // Health checks
   app.get("/healthz", async () => ({ status: "ok" }))

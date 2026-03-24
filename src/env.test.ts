@@ -5,7 +5,6 @@ const REQUIRED_ENV_VARS = {
   JWT_SECRET: "test-secret",
   GITHUB_CLIENT_ID: "client-id",
   GITHUB_CLIENT_SECRET: "client-secret",
-  ANTHROPIC_API_KEY: "sk-ant-test-key",
 }
 
 const ALL_ENV_VARS = {
@@ -38,7 +37,7 @@ describe("loadEnv", () => {
     expect(env.JWT_SECRET).toBe("test-secret")
     expect(env.GITHUB_CLIENT_ID).toBe("client-id")
     expect(env.GITHUB_CLIENT_SECRET).toBe("client-secret")
-    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test-key")
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined()
   })
 
   it("should apply default PORT of 3000", () => {
@@ -190,11 +189,11 @@ describe("loadEnv", () => {
     expect(() => loadEnv()).toThrow("Missing environment variables")
   })
 
-  it("should throw when ANTHROPIC_API_KEY is missing", () => {
-    const { ANTHROPIC_API_KEY, ...rest } = REQUIRED_ENV_VARS
-    vi.stubGlobal("process", { ...process, env: { ...rest } })
+  it("should leave ANTHROPIC_API_KEY as undefined when not provided", () => {
+    vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
 
-    expect(() => loadEnv()).toThrow("Missing environment variables")
+    const env = loadEnv()
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined()
   })
 
   it("should throw listing all missing vars when multiple are missing", () => {

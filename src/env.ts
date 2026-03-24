@@ -14,7 +14,7 @@ const envSchema = z.object({
   GITHUB_CLIENT_SECRET: z.string(),
   GITHUB_SCOPES: z.string().default("read:user,repo"),
   GIT_TOKEN: z.string().optional(),
-  ANTHROPIC_API_KEY: z.string(),
+  ANTHROPIC_API_KEY: z.string().optional(),
   MAX_CONCURRENT_TASKS: z.coerce.number().int().min(1).default(5),
   WORKSPACE_BASE_DIR: z.string().default("/tmp/cc-fleet-workspaces"),
   ALLOWED_REPOS: z.string().default(""),

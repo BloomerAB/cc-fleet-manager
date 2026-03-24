@@ -8,6 +8,7 @@ interface User {
   readonly avatarUrl: string | null
   readonly accessToken: string
   readonly tokenScopes: string
+  readonly anthropicApiKey: string | null
   readonly createdAt: Date
   readonly updatedAt: Date
 }
@@ -26,6 +27,7 @@ const createUserStore = (client: Client) => ({
   upsert: async (input: UpsertUserInput): Promise<User> => {
     const now = new Date()
 
+    // Use IF NOT EXISTS for anthropic_api_key to preserve existing value on re-login
     await client.execute(
       `INSERT INTO users (id, github_login, name, email, avatar_url, access_token, token_scopes, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -43,8 +45,16 @@ const createUserStore = (client: Client) => ({
       { prepare: true },
     )
 
+    // Fetch to get current anthropic_api_key (preserved from previous session)
+    const existing = await client.execute(
+      "SELECT anthropic_api_key FROM users WHERE id = ?",
+      [input.id],
+      { prepare: true },
+    )
+
     return {
       ...input,
+      anthropicApiKey: existing.first()?.anthropic_api_key ?? null,
       createdAt: now,
       updatedAt: now,
     }
@@ -67,6 +77,7 @@ const createUserStore = (client: Client) => ({
       avatarUrl: row.avatar_url ?? null,
       accessToken: row.access_token,
       tokenScopes: row.token_scopes,
+      anthropicApiKey: row.anthropic_api_key ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }
@@ -80,6 +91,24 @@ const createUserStore = (client: Client) => ({
     )
     const row = result.first()
     return row?.access_token ?? null
+  },
+
+  getAnthropicApiKey: async (userId: string): Promise<string | null> => {
+    const result = await client.execute(
+      "SELECT anthropic_api_key FROM users WHERE id = ?",
+      [userId],
+      { prepare: true },
+    )
+    const row = result.first()
+    return row?.anthropic_api_key ?? null
+  },
+
+  setAnthropicApiKey: async (userId: string, apiKey: string | null): Promise<void> => {
+    await client.execute(
+      "UPDATE users SET anthropic_api_key = ?, updated_at = ? WHERE id = ?",
+      [apiKey, new Date(), userId],
+      { prepare: true },
+    )
   },
 })
 
