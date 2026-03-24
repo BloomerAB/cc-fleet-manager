@@ -89,8 +89,8 @@ const createJobCreator = (env: Env) => {
                       name: "ANTHROPIC_API_KEY",
                       valueFrom: {
                         secretKeyRef: {
-                          name: "anthropic-api-key",
-                          key: "api-key",
+                          name: env.ANTHROPIC_SECRET_NAME,
+                          key: env.ANTHROPIC_SECRET_KEY,
                         },
                       },
                     },

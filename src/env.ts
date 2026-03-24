@@ -17,7 +17,8 @@ const envSchema = z.object({
   GITHUB_APP_INSTALLATION_ID: z.string(),
   RUNNER_IMAGE: z.string().default("ghcr.io/bloomerab/claude-agent-runner:latest"),
   RUNNER_NAMESPACE: z.string().default("claude-platform"),
-  ANTHROPIC_API_KEY: z.string(),
+  ANTHROPIC_SECRET_NAME: z.string().default("anthropic-api-key"),
+  ANTHROPIC_SECRET_KEY: z.string().default("api-key"),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
 })
 

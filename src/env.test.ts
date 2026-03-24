@@ -8,7 +8,8 @@ const REQUIRED_ENV_VARS = {
   GITHUB_APP_ID: "12345",
   GITHUB_APP_PRIVATE_KEY: "private-key",
   GITHUB_APP_INSTALLATION_ID: "67890",
-  ANTHROPIC_API_KEY: "sk-ant-test",
+  ANTHROPIC_SECRET_NAME: "anthropic-api-key",
+  ANTHROPIC_SECRET_KEY: "api-key",
 }
 
 const ALL_ENV_VARS = {
@@ -39,7 +40,8 @@ describe("loadEnv", () => {
     expect(env.GITHUB_APP_ID).toBe("12345")
     expect(env.GITHUB_APP_PRIVATE_KEY).toBe("private-key")
     expect(env.GITHUB_APP_INSTALLATION_ID).toBe("67890")
-    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test")
+    expect(env.ANTHROPIC_SECRET_NAME).toBe("anthropic-api-key")
+    expect(env.ANTHROPIC_SECRET_KEY).toBe("api-key")
   })
 
   it("should apply default PORT of 3000", () => {
@@ -140,13 +142,6 @@ describe("loadEnv", () => {
 
   it("should throw when GITHUB_CLIENT_ID is missing", () => {
     const { GITHUB_CLIENT_ID, ...rest } = REQUIRED_ENV_VARS
-    vi.stubGlobal("process", { ...process, env: { ...rest } })
-
-    expect(() => loadEnv()).toThrow("Missing environment variables")
-  })
-
-  it("should throw when ANTHROPIC_API_KEY is missing", () => {
-    const { ANTHROPIC_API_KEY, ...rest } = REQUIRED_ENV_VARS
     vi.stubGlobal("process", { ...process, env: { ...rest } })
 
     expect(() => loadEnv()).toThrow("Missing environment variables")

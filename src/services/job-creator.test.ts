@@ -44,7 +44,8 @@ const createMockEnv = (overrides: Partial<Env> = {}): Env => ({
   GITHUB_APP_INSTALLATION_ID: "67890",
   RUNNER_IMAGE: "ghcr.io/bloomerab/claude-agent-runner:latest",
   RUNNER_NAMESPACE: "claude-platform",
-  ANTHROPIC_API_KEY: "sk-ant-test",
+  ANTHROPIC_SECRET_NAME: "anthropic-api-key",
+  ANTHROPIC_SECRET_KEY: "api-key",
   CORS_ORIGIN: "http://localhost:5173",
   ...overrides,
 })
