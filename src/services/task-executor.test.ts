@@ -14,6 +14,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 vi.mock("node:fs/promises", () => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
   rm: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock("node:child_process", () => ({
@@ -107,6 +108,7 @@ describe("createTaskExecutor", () => {
         userId: "user-1",
         status: "queued",
         prompt: "Fix bug",
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
         repos: [{ url: "https://github.com/org/repo" }],
         maxTurns: 50,
         maxBudgetUsd: 5.0,
@@ -128,6 +130,7 @@ describe("createTaskExecutor", () => {
         userId: "user-1",
         status: "queued" as const,
         prompt: "Fix bug",
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
         repos: [{ url: "https://github.com/org/repo" }],
         maxTurns: 50,
         maxBudgetUsd: 5.0,
@@ -170,6 +173,7 @@ describe("createTaskExecutor", () => {
         userId: "user-1",
         status: "queued",
         prompt: "Fix bug",
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
         repos: [{ url: "https://github.com/org/repo" }],
         maxTurns: 50,
         maxBudgetUsd: 5.0,
@@ -216,6 +220,7 @@ describe("createTaskExecutor", () => {
         userId: "user-1",
         status: "queued",
         prompt: "Fix bug",
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
         repos: [{ url: "https://github.com/org/repo" }],
         maxTurns: 50,
         maxBudgetUsd: 5.0,
@@ -238,6 +243,7 @@ describe("createTaskExecutor", () => {
         userId: "user-1",
         status: "queued",
         prompt: "Fix bug",
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
         repos: [{ url: "https://github.com/org/repo" }],
         maxTurns: 50,
         maxBudgetUsd: 5.0,
@@ -269,6 +275,7 @@ describe("createTaskExecutor", () => {
         userId: "user-1",
         status: "queued",
         prompt: "Fix bug",
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
         repos: [{ url: "https://github.com/org/repo" }],
         maxTurns: 50,
         maxBudgetUsd: 5.0,
@@ -312,6 +319,7 @@ describe("createTaskExecutor", () => {
         userId: "user-1",
         status: "queued",
         prompt: "Fix bug",
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
         repos: [{ url: "https://github.com/org/repo" }],
         maxTurns: 50,
         maxBudgetUsd: 5.0,

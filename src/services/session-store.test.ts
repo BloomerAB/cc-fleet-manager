@@ -31,7 +31,7 @@ describe("createSessionStore", () => {
       const result = await store.create({
         userId: "user-1",
         prompt: "Fix the bug",
-        repos: [{ url: "https://github.com/org/repo" }],
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
         maxTurns: 30,
         maxBudgetUsd: 3.0,
       })
@@ -40,13 +40,14 @@ describe("createSessionStore", () => {
       expect(result.userId).toBe("user-1")
       expect(result.prompt).toBe("Fix the bug")
       expect(result.repos).toEqual([{ url: "https://github.com/org/repo" }])
+      expect(result.repoSource).toEqual({ mode: "direct", repos: [{ url: "https://github.com/org/repo" }] })
       expect(result.maxTurns).toBe(30)
       expect(result.maxBudgetUsd).toBe(3.0)
       expect(result.status).toBe("queued")
       expect(result.id).toBeDefined()
     })
 
-    it("should support multiple repos", async () => {
+    it("should support multiple repos in direct mode", async () => {
       mock.execute.mockResolvedValueOnce({})
 
       const repos = [
@@ -57,7 +58,7 @@ describe("createSessionStore", () => {
       const result = await store.create({
         userId: "user-1",
         prompt: "Fix across repos",
-        repos,
+        repoSource: { mode: "direct" as const, repos },
       })
 
       expect(result.repos).toEqual(repos)
@@ -66,16 +67,16 @@ describe("createSessionStore", () => {
       expect(params).toContain(JSON.stringify(repos))
     })
 
-    it("should apply default maxTurns of 50 when not provided", async () => {
+    it("should apply default maxTurns of 200 when not provided", async () => {
       mock.execute.mockResolvedValueOnce({})
 
       const result = await store.create({
         userId: "user-1",
         prompt: "Do something",
-        repos: [{ url: "https://github.com/org/repo" }],
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
       })
 
-      expect(result.maxTurns).toBe(50)
+      expect(result.maxTurns).toBe(200)
     })
 
     it("should apply default maxBudgetUsd of 5.0 when not provided", async () => {
@@ -84,7 +85,7 @@ describe("createSessionStore", () => {
       const result = await store.create({
         userId: "user-1",
         prompt: "Do something",
-        repos: [{ url: "https://github.com/org/repo" }],
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
       })
 
       expect(result.maxBudgetUsd).toBe(5.0)
@@ -96,7 +97,7 @@ describe("createSessionStore", () => {
       const result = await store.create({
         userId: "user-1",
         prompt: "Fix",
-        repos: [{ url: "https://github.com/org/repo", branch: "feature/foo" }],
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo", branch: "feature/foo" }] },
       })
 
       expect(result.repos[0].branch).toBe("feature/foo")
@@ -108,7 +109,7 @@ describe("createSessionStore", () => {
       const result = await store.create({
         userId: "user-1",
         prompt: "Fix",
-        repos: [{ url: "https://github.com/org/repo" }],
+        repoSource: { mode: "direct" as const, repos: [{ url: "https://github.com/org/repo" }] },
       })
 
       expect(result.result).toBeNull()
@@ -126,6 +127,7 @@ describe("createSessionStore", () => {
           user_id: "user-1",
           status: "running",
           prompt: "Fix bug",
+          repo_source: JSON.stringify({ mode: "direct", repos: [{ url: "https://github.com/org/repo" }] }),
           repos: JSON.stringify([{ url: "https://github.com/org/repo" }]),
           max_turns: 50,
           max_budget_usd: 5.0,
@@ -144,6 +146,7 @@ describe("createSessionStore", () => {
       expect(result!.userId).toBe("user-1")
       expect(result!.status).toBe("running")
       expect(result!.repos).toEqual([{ url: "https://github.com/org/repo" }])
+      expect(result!.repoSource.mode).toBe("direct")
     })
 
     it("should return null when not found", async () => {

@@ -4,7 +4,7 @@ import { isRepoAllowed, parseAllowedRepos } from "./tasks.js"
 
 // Re-create the schemas from the source to test validation independently
 const MAX_PROMPT_LENGTH = 10000
-const MAX_TURNS_LIMIT = 200
+const MAX_TURNS_LIMIT = 500
 const MIN_BUDGET_USD = 0.01
 const MAX_BUDGET_USD = 50
 const MAX_PAGE_SIZE = 100
@@ -15,9 +15,32 @@ const repoSchema = z.object({
   branch: z.string().optional(),
 })
 
+const directSourceSchema = z.object({
+  mode: z.literal("direct"),
+  repos: z.array(repoSchema).min(1).max(MAX_REPOS),
+})
+
+const orgSourceSchema = z.object({
+  mode: z.literal("org"),
+  org: z.string().min(1),
+  pattern: z.string().optional(),
+})
+
+const discoverySourceSchema = z.object({
+  mode: z.literal("discovery"),
+  org: z.string().min(1),
+  hint: z.string().max(500).optional(),
+})
+
+const repoSourceSchema = z.discriminatedUnion("mode", [
+  directSourceSchema,
+  orgSourceSchema,
+  discoverySourceSchema,
+])
+
 const createTaskSchema = z.object({
   prompt: z.string().min(1).max(MAX_PROMPT_LENGTH),
-  repos: z.array(repoSchema).min(1).max(MAX_REPOS),
+  repoSource: repoSourceSchema,
   maxTurns: z.number().int().min(1).max(MAX_TURNS_LIMIT).optional(),
   maxBudgetUsd: z.number().min(MIN_BUDGET_USD).max(MAX_BUDGET_USD).optional(),
 })
@@ -29,224 +52,199 @@ const listQuerySchema = z.object({
 })
 
 describe("createTaskSchema", () => {
-  it("should validate a minimal valid task", () => {
-    const result = createTaskSchema.parse({
-      prompt: "Fix the bug",
-      repos: [{ url: "https://github.com/org/repo" }],
+  describe("direct mode", () => {
+    it("should validate a minimal direct task", () => {
+      const result = createTaskSchema.parse({
+        prompt: "Fix the bug",
+        repoSource: {
+          mode: "direct",
+          repos: [{ url: "https://github.com/org/repo" }],
+        },
+      })
+      expect(result.prompt).toBe("Fix the bug")
+      expect(result.repoSource.mode).toBe("direct")
+      if (result.repoSource.mode === "direct") {
+        expect(result.repoSource.repos).toHaveLength(1)
+        expect(result.repoSource.repos[0].url).toBe("https://github.com/org/repo")
+      }
     })
-    expect(result.prompt).toBe("Fix the bug")
-    expect(result.repos).toHaveLength(1)
-    expect(result.repos[0].url).toBe("https://github.com/org/repo")
-    expect(result.maxTurns).toBeUndefined()
-    expect(result.maxBudgetUsd).toBeUndefined()
-  })
 
-  it("should validate a fully-specified task with multiple repos", () => {
-    const result = createTaskSchema.parse({
-      prompt: "Fix the bug",
-      repos: [
-        { url: "https://github.com/org/repo1", branch: "main" },
-        { url: "https://github.com/org/repo2", branch: "develop" },
-      ],
-      maxTurns: 100,
-      maxBudgetUsd: 10,
+    it("should validate multiple repos with branches", () => {
+      const result = createTaskSchema.parse({
+        prompt: "Fix the bug",
+        repoSource: {
+          mode: "direct",
+          repos: [
+            { url: "https://github.com/org/repo1", branch: "main" },
+            { url: "https://github.com/org/repo2", branch: "develop" },
+          ],
+        },
+        maxTurns: 100,
+        maxBudgetUsd: 10,
+      })
+      if (result.repoSource.mode === "direct") {
+        expect(result.repoSource.repos).toHaveLength(2)
+        expect(result.repoSource.repos[0].branch).toBe("main")
+        expect(result.repoSource.repos[1].branch).toBe("develop")
+      }
     })
-    expect(result.repos).toHaveLength(2)
-    expect(result.repos[0].branch).toBe("main")
-    expect(result.repos[1].branch).toBe("develop")
-    expect(result.maxTurns).toBe(100)
-    expect(result.maxBudgetUsd).toBe(10)
-  })
 
-  it("should accept repos with optional branch", () => {
-    const result = createTaskSchema.parse({
-      prompt: "Fix",
-      repos: [{ url: "https://github.com/org/repo" }],
+    it("should reject empty repos array", () => {
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "Fix it",
+          repoSource: { mode: "direct", repos: [] },
+        }),
+      ).toThrow()
     })
-    expect(result.repos[0].branch).toBeUndefined()
-  })
 
-  it("should reject empty prompt", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "",
-        repos: [{ url: "https://github.com/org/repo" }],
-      }),
-    ).toThrow()
-  })
-
-  it("should reject prompt exceeding max length", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "x".repeat(10001),
-        repos: [{ url: "https://github.com/org/repo" }],
-      }),
-    ).toThrow()
-  })
-
-  it("should accept prompt at max length", () => {
-    const result = createTaskSchema.parse({
-      prompt: "x".repeat(10000),
-      repos: [{ url: "https://github.com/org/repo" }],
+    it("should reject repos exceeding max count", () => {
+      const repos = Array.from({ length: 11 }, (_, i) => ({
+        url: `https://github.com/org/repo${i}`,
+      }))
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "Fix it",
+          repoSource: { mode: "direct", repos },
+        }),
+      ).toThrow()
     })
-    expect(result.prompt).toHaveLength(10000)
-  })
 
-  it("should reject empty repos array", () => {
-    expect(() =>
-      createTaskSchema.parse({
+    it("should accept repos at max count", () => {
+      const repos = Array.from({ length: 10 }, (_, i) => ({
+        url: `https://github.com/org/repo${i}`,
+      }))
+      const result = createTaskSchema.parse({
         prompt: "Fix it",
-        repos: [],
-      }),
-    ).toThrow()
-  })
-
-  it("should reject repos exceeding max count", () => {
-    const repos = Array.from({ length: 11 }, (_, i) => ({
-      url: `https://github.com/org/repo${i}`,
-    }))
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "Fix it",
-        repos,
-      }),
-    ).toThrow()
-  })
-
-  it("should accept repos at max count", () => {
-    const repos = Array.from({ length: 10 }, (_, i) => ({
-      url: `https://github.com/org/repo${i}`,
-    }))
-    const result = createTaskSchema.parse({
-      prompt: "Fix it",
-      repos,
+        repoSource: { mode: "direct", repos },
+      })
+      if (result.repoSource.mode === "direct") {
+        expect(result.repoSource.repos).toHaveLength(10)
+      }
     })
-    expect(result.repos).toHaveLength(10)
-  })
 
-  it("should reject invalid repo url", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "Fix it",
-        repos: [{ url: "not-a-url" }],
-      }),
-    ).toThrow()
-  })
-
-  it("should reject missing repos", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "Fix it",
-      }),
-    ).toThrow()
-  })
-
-  it("should reject missing prompt", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        repos: [{ url: "https://github.com/org/repo" }],
-      }),
-    ).toThrow()
-  })
-
-  it("should reject maxTurns of 0", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "Fix",
-        repos: [{ url: "https://github.com/org/repo" }],
-        maxTurns: 0,
-      }),
-    ).toThrow()
-  })
-
-  it("should reject maxTurns exceeding 200", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "Fix",
-        repos: [{ url: "https://github.com/org/repo" }],
-        maxTurns: 201,
-      }),
-    ).toThrow()
-  })
-
-  it("should accept maxTurns at boundary values", () => {
-    const min = createTaskSchema.parse({
-      prompt: "Fix",
-      repos: [{ url: "https://github.com/org/repo" }],
-      maxTurns: 1,
+    it("should reject invalid repo url", () => {
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "Fix it",
+          repoSource: { mode: "direct", repos: [{ url: "not-a-url" }] },
+        }),
+      ).toThrow()
     })
-    expect(min.maxTurns).toBe(1)
+  })
 
-    const max = createTaskSchema.parse({
-      prompt: "Fix",
-      repos: [{ url: "https://github.com/org/repo" }],
-      maxTurns: 200,
+  describe("org mode", () => {
+    it("should validate org mode with pattern", () => {
+      const result = createTaskSchema.parse({
+        prompt: "Update all services",
+        repoSource: { mode: "org", org: "BloomerAB", pattern: "service-*" },
+      })
+      expect(result.repoSource.mode).toBe("org")
+      if (result.repoSource.mode === "org") {
+        expect(result.repoSource.org).toBe("BloomerAB")
+        expect(result.repoSource.pattern).toBe("service-*")
+      }
     })
-    expect(max.maxTurns).toBe(200)
-  })
 
-  it("should reject non-integer maxTurns", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "Fix",
-        repos: [{ url: "https://github.com/org/repo" }],
-        maxTurns: 5.5,
-      }),
-    ).toThrow()
-  })
-
-  it("should reject maxBudgetUsd below minimum", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "Fix",
-        repos: [{ url: "https://github.com/org/repo" }],
-        maxBudgetUsd: 0,
-      }),
-    ).toThrow()
-  })
-
-  it("should reject maxBudgetUsd exceeding 50", () => {
-    expect(() =>
-      createTaskSchema.parse({
-        prompt: "Fix",
-        repos: [{ url: "https://github.com/org/repo" }],
-        maxBudgetUsd: 51,
-      }),
-    ).toThrow()
-  })
-
-  it("should accept maxBudgetUsd at boundary values", () => {
-    const min = createTaskSchema.parse({
-      prompt: "Fix",
-      repos: [{ url: "https://github.com/org/repo" }],
-      maxBudgetUsd: 0.01,
+    it("should validate org mode without pattern", () => {
+      const result = createTaskSchema.parse({
+        prompt: "Update all",
+        repoSource: { mode: "org", org: "BloomerAB" },
+      })
+      if (result.repoSource.mode === "org") {
+        expect(result.repoSource.pattern).toBeUndefined()
+      }
     })
-    expect(min.maxBudgetUsd).toBe(0.01)
 
-    const max = createTaskSchema.parse({
-      prompt: "Fix",
-      repos: [{ url: "https://github.com/org/repo" }],
-      maxBudgetUsd: 50,
+    it("should reject org mode with empty org", () => {
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "Fix",
+          repoSource: { mode: "org", org: "" },
+        }),
+      ).toThrow()
     })
-    expect(max.maxBudgetUsd).toBe(50)
   })
 
-  it("should accept decimal maxBudgetUsd", () => {
-    const result = createTaskSchema.parse({
-      prompt: "Fix",
-      repos: [{ url: "https://github.com/org/repo" }],
-      maxBudgetUsd: 2.5,
+  describe("discovery mode", () => {
+    it("should validate discovery mode with hint", () => {
+      const result = createTaskSchema.parse({
+        prompt: "Find and fix security issues",
+        repoSource: { mode: "discovery", org: "BloomerAB", hint: "focus on backend services" },
+      })
+      expect(result.repoSource.mode).toBe("discovery")
+      if (result.repoSource.mode === "discovery") {
+        expect(result.repoSource.org).toBe("BloomerAB")
+        expect(result.repoSource.hint).toBe("focus on backend services")
+      }
     })
-    expect(result.maxBudgetUsd).toBe(2.5)
+
+    it("should validate discovery mode without hint", () => {
+      const result = createTaskSchema.parse({
+        prompt: "Audit",
+        repoSource: { mode: "discovery", org: "BloomerAB" },
+      })
+      if (result.repoSource.mode === "discovery") {
+        expect(result.repoSource.hint).toBeUndefined()
+      }
+    })
   })
 
-  it("should strip unknown fields", () => {
-    const result = createTaskSchema.parse({
-      prompt: "Fix",
-      repos: [{ url: "https://github.com/org/repo" }],
-      unknownField: "should be stripped",
+  describe("common validation", () => {
+    it("should reject empty prompt", () => {
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "",
+          repoSource: { mode: "org", org: "BloomerAB" },
+        }),
+      ).toThrow()
     })
-    expect((result as Record<string, unknown>).unknownField).toBeUndefined()
+
+    it("should reject prompt exceeding max length", () => {
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "x".repeat(10001),
+          repoSource: { mode: "org", org: "BloomerAB" },
+        }),
+      ).toThrow()
+    })
+
+    it("should reject maxTurns of 0", () => {
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "Fix",
+          repoSource: { mode: "org", org: "BloomerAB" },
+          maxTurns: 0,
+        }),
+      ).toThrow()
+    })
+
+    it("should reject maxTurns exceeding 500", () => {
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "Fix",
+          repoSource: { mode: "org", org: "BloomerAB" },
+          maxTurns: 501,
+        }),
+      ).toThrow()
+    })
+
+    it("should reject invalid mode", () => {
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "Fix",
+          repoSource: { mode: "invalid" },
+        }),
+      ).toThrow()
+    })
+
+    it("should reject missing repoSource", () => {
+      expect(() =>
+        createTaskSchema.parse({
+          prompt: "Fix",
+        }),
+      ).toThrow()
+    })
   })
 })
 

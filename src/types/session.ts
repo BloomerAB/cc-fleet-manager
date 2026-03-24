@@ -12,9 +12,29 @@ export interface RepoConfig {
   readonly branch?: string
 }
 
+// Repo source modes — how Claude discovers which repos to work with
+export interface DirectRepoSource {
+  readonly mode: "direct"
+  readonly repos: readonly RepoConfig[]
+}
+
+export interface OrgRepoSource {
+  readonly mode: "org"
+  readonly org: string
+  readonly pattern?: string // glob pattern to filter repo names
+}
+
+export interface DiscoveryRepoSource {
+  readonly mode: "discovery"
+  readonly org: string
+  readonly hint?: string // natural language hint for Claude
+}
+
+export type RepoSource = DirectRepoSource | OrgRepoSource | DiscoveryRepoSource
+
 export interface TaskConfig {
   readonly prompt: string
-  readonly repos: readonly RepoConfig[]
+  readonly repoSource: RepoSource
   readonly maxTurns?: number
   readonly maxBudgetUsd?: number
   readonly deadlineSeconds?: number
@@ -25,6 +45,7 @@ export interface Session {
   readonly userId: string
   readonly status: SessionStatus
   readonly prompt: string
+  readonly repoSource: RepoSource
   readonly repos: readonly RepoConfig[]
   readonly maxTurns: number
   readonly maxBudgetUsd: number

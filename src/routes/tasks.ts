@@ -4,10 +4,11 @@ import { minimatch } from "minimatch"
 import type { SessionStore } from "../services/session-store.js"
 import type { TaskExecutor } from "../services/task-executor.js"
 import type { WsManager } from "../services/ws-manager.js"
+import type { UserStore } from "../services/user-store.js"
 import type { Env } from "../env.js"
 
 const MAX_PROMPT_LENGTH = 10000
-const MAX_TURNS_LIMIT = 200
+const MAX_TURNS_LIMIT = 500
 const MIN_BUDGET_USD = 0.01
 const MAX_BUDGET_USD = 50
 const MAX_PAGE_SIZE = 100
@@ -18,9 +19,32 @@ const repoSchema = z.object({
   branch: z.string().optional(),
 })
 
+const directSourceSchema = z.object({
+  mode: z.literal("direct"),
+  repos: z.array(repoSchema).min(1).max(MAX_REPOS),
+})
+
+const orgSourceSchema = z.object({
+  mode: z.literal("org"),
+  org: z.string().min(1),
+  pattern: z.string().optional(),
+})
+
+const discoverySourceSchema = z.object({
+  mode: z.literal("discovery"),
+  org: z.string().min(1),
+  hint: z.string().max(500).optional(),
+})
+
+const repoSourceSchema = z.discriminatedUnion("mode", [
+  directSourceSchema,
+  orgSourceSchema,
+  discoverySourceSchema,
+])
+
 const createTaskSchema = z.object({
   prompt: z.string().min(1).max(MAX_PROMPT_LENGTH),
-  repos: z.array(repoSchema).min(1).max(MAX_REPOS),
+  repoSource: repoSourceSchema,
   maxTurns: z.number().int().min(1).max(MAX_TURNS_LIMIT).optional(),
   maxBudgetUsd: z.number().min(MIN_BUDGET_USD).max(MAX_BUDGET_USD).optional(),
 })
@@ -51,6 +75,7 @@ const registerTaskRoutes = (
   app: FastifyInstance,
   env: Env,
   sessionStore: SessionStore,
+  userStore: UserStore,
   taskExecutor: TaskExecutor,
   wsManager: WsManager,
 ) => {
@@ -72,12 +97,25 @@ const registerTaskRoutes = (
     const body = createTaskSchema.parse(request.body)
     const user = request.user as JwtPayload
 
-    // Validate repos against allowlist
-    for (const repo of body.repos) {
-      if (!isRepoAllowed(repo.url, allowedRepos)) {
-        return reply.status(403).send({
+    // Validate repos against allowlist (only for direct mode)
+    if (body.repoSource.mode === "direct") {
+      for (const repo of body.repoSource.repos) {
+        if (!isRepoAllowed(repo.url, allowedRepos)) {
+          return reply.status(403).send({
+            success: false,
+            error: `Repository not allowed: ${repo.url}`,
+          })
+        }
+      }
+    }
+
+    // For org/discovery modes, verify the user has a GitHub token
+    if (body.repoSource.mode !== "direct") {
+      const token = await userStore.getAccessToken(user.sub)
+      if (!token) {
+        return reply.status(400).send({
           success: false,
-          error: `Repository not allowed: ${repo.url}`,
+          error: "No GitHub token found. Re-login required for org/discovery modes.",
         })
       }
     }
@@ -85,7 +123,7 @@ const registerTaskRoutes = (
     const session = await sessionStore.create({
       userId: user.sub,
       prompt: body.prompt,
-      repos: body.repos,
+      repoSource: body.repoSource,
       maxTurns: body.maxTurns,
       maxBudgetUsd: body.maxBudgetUsd,
     })

@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id UUID,
   status TEXT,
   prompt TEXT,
+  repo_source TEXT,
   repos TEXT,
   max_turns INT,
   max_budget_usd FLOAT,

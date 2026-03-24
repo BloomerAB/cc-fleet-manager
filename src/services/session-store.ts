@@ -1,16 +1,11 @@
 import { types as cassandraTypes } from "cassandra-driver"
 import type { Client } from "cassandra-driver"
-import type { SessionStatus, SessionResult } from "../types/index.js"
-
-interface RepoConfig {
-  readonly url: string
-  readonly branch?: string
-}
+import type { SessionStatus, SessionResult, RepoSource, RepoConfig } from "../types/index.js"
 
 interface CreateSessionInput {
   readonly userId: string
   readonly prompt: string
-  readonly repos: readonly RepoConfig[]
+  readonly repoSource: RepoSource
   readonly maxTurns?: number
   readonly maxBudgetUsd?: number
 }
@@ -20,6 +15,7 @@ interface Session {
   readonly userId: string
   readonly status: SessionStatus
   readonly prompt: string
+  readonly repoSource: RepoSource
   readonly repos: readonly RepoConfig[]
   readonly maxTurns: number
   readonly maxBudgetUsd: number
@@ -40,16 +36,28 @@ interface SessionMessage {
   readonly createdAt: Date
 }
 
-const DEFAULT_MAX_TURNS = 50
+const DEFAULT_MAX_TURNS = 200
 const DEFAULT_MAX_BUDGET_USD = 5.0
 const DEFAULT_DEADLINE_SECONDS = 3600
 const DEFAULT_LIST_LIMIT = 20
+
+const parseRepoSource = (raw: string | null | undefined): RepoSource => {
+  if (raw) {
+    try {
+      return JSON.parse(raw) as RepoSource
+    } catch {
+      // fallback
+    }
+  }
+  return { mode: "direct", repos: [] }
+}
 
 const rowToSession = (row: cassandraTypes.Row): Session => ({
   id: row.id.toString(),
   userId: row.user_id,
   status: row.status as SessionStatus,
   prompt: row.prompt,
+  repoSource: parseRepoSource(row.repo_source),
   repos: row.repos ? JSON.parse(row.repos) : [],
   maxTurns: row.max_turns,
   maxBudgetUsd: row.max_budget_usd,
@@ -76,15 +84,17 @@ const createSessionStore = (client: Client) => ({
     const now = new Date()
     const maxTurns = input.maxTurns ?? DEFAULT_MAX_TURNS
     const maxBudgetUsd = input.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD
+    const initialRepos = input.repoSource.mode === "direct" ? input.repoSource.repos : []
 
     await client.execute(
       `INSERT INTO sessions (
-        user_id, id, status, prompt, repos,
+        user_id, id, status, prompt, repo_source, repos,
         max_turns, max_budget_usd, deadline_seconds, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.userId, id, "queued", input.prompt,
-        JSON.stringify(input.repos),
+        JSON.stringify(input.repoSource),
+        JSON.stringify(initialRepos),
         maxTurns, maxBudgetUsd, DEFAULT_DEADLINE_SECONDS, now, now,
       ],
       { prepare: true },
@@ -95,7 +105,8 @@ const createSessionStore = (client: Client) => ({
       userId: input.userId,
       status: "queued",
       prompt: input.prompt,
-      repos: input.repos,
+      repoSource: input.repoSource,
+      repos: initialRepos,
       maxTurns,
       maxBudgetUsd,
       deadlineSeconds: DEFAULT_DEADLINE_SECONDS,
@@ -212,4 +223,4 @@ const createSessionStore = (client: Client) => ({
 
 type SessionStore = ReturnType<typeof createSessionStore>
 
-export { type RepoConfig, type CreateSessionInput, type Session, type SessionMessage, type SessionStore, createSessionStore }
+export { type CreateSessionInput, type Session, type SessionMessage, type SessionStore, createSessionStore }
