@@ -149,19 +149,35 @@ const registerSessionRoutes = (
 
     const conn = wsManager.registerDashboard(user.sub, socket as unknown as WebSocket)
 
-    socket.on("message", (raw: Buffer) => {
+    socket.on("message", async (raw: Buffer) => {
       try {
         const message = parseDashboardMessage(raw.toString())
 
         switch (message.type) {
           case "subscribe": {
-            conn.subscribedSessions.clear()
+            // Validate session ownership — only allow subscribing to own sessions
+            const ownedIds: string[] = []
             for (const id of message.sessionIds) {
+              const session = await sessionStore.findById(id, user.sub)
+              if (session) {
+                ownedIds.push(id)
+              } else {
+                app.log.warn({ sessionId: id, userId: user.sub }, "Subscription denied: not owner")
+              }
+            }
+            conn.subscribedSessions.clear()
+            for (const id of ownedIds) {
               conn.subscribedSessions.add(id)
             }
             break
           }
           case "answer": {
+            // Verify user owns this session before forwarding answer
+            const session = await sessionStore.findById(message.sessionId, user.sub)
+            if (!session) {
+              app.log.warn({ sessionId: message.sessionId, userId: user.sub }, "Answer denied: not owner")
+              break
+            }
             wsManager.sendToRunner(message.sessionId, {
               type: "answer",
               answers: message.answers,
@@ -169,6 +185,12 @@ const registerSessionRoutes = (
             break
           }
           case "cancel": {
+            // Verify user owns this session before forwarding cancel
+            const session = await sessionStore.findById(message.sessionId, user.sub)
+            if (!session) {
+              app.log.warn({ sessionId: message.sessionId, userId: user.sub }, "Cancel denied: not owner")
+              break
+            }
             wsManager.sendToRunner(message.sessionId, {
               type: "cancel",
             })

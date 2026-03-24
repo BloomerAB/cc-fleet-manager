@@ -41,8 +41,9 @@ const main = async () => {
   registerTaskRoutes(app, env, sessionStore, jobCreator, githubApp, wsManager)
   registerSessionRoutes(app, wsManager, sessionStore)
 
-  // Health check
+  // Health checks
   app.get("/healthz", async () => ({ status: "ok" }))
+  app.get("/health", async () => ({ status: "ok" }))
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {

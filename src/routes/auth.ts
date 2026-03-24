@@ -117,6 +117,11 @@ const registerAuthRoutes = (app: FastifyInstance, env: Env) => {
       },
     }
   })
+
+  // Logout -- client-side token removal is sufficient since JWTs are stateless
+  app.post("/api/auth/logout", async () => {
+    return { success: true }
+  })
 }
 
 export { registerAuthRoutes }
