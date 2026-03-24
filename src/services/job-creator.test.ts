@@ -46,6 +46,7 @@ const createMockEnv = (overrides: Partial<Env> = {}): Env => ({
   RUNNER_NAMESPACE: "claude-platform",
   ANTHROPIC_SECRET_NAME: "anthropic-api-key",
   ANTHROPIC_SECRET_KEY: "api-key",
+  MANAGER_SERVICE_NAME: "claude-session-manager",
   CORS_ORIGIN: "http://localhost:5173",
   ...overrides,
 })

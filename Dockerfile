@@ -1,3 +1,14 @@
+# Dashboard build stage
+FROM node:24-alpine AS dashboard
+WORKDIR /dashboard
+ARG NPM_TOKEN
+ARG DASHBOARD_REPO=https://github.com/BloomerAB/claude-dashboard.git
+ARG DASHBOARD_REF=main
+RUN apk add --no-cache git \
+    && git clone --depth 1 --branch ${DASHBOARD_REF} ${DASHBOARD_REPO} .
+COPY .npmrc .npmrc
+RUN npm ci && npm run build
+
 # NPM stage (all deps for build)
 FROM node:24-alpine AS npm
 WORKDIR /app
@@ -29,6 +40,7 @@ RUN addgroup -g 1001 -S nodejs && adduser -S appuser -u 1001
 
 COPY --from=deps-prod /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY --from=dashboard /dashboard/dist ./public
 COPY package.json ./
 
 USER appuser

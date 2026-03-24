@@ -19,6 +19,7 @@ const envSchema = z.object({
   RUNNER_NAMESPACE: z.string().default("claude-platform"),
   ANTHROPIC_SECRET_NAME: z.string().default("anthropic-api-key"),
   ANTHROPIC_SECRET_KEY: z.string().default("api-key"),
+  MANAGER_SERVICE_NAME: z.string().default("claude-session-manager"),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
 })
 
