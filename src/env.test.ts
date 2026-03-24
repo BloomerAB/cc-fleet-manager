@@ -15,7 +15,7 @@ const ALL_ENV_VARS = {
   SCYLLA_HOST: "scylla",
   SCYLLA_PORT: "9042",
   SCYLLA_DATACENTER: "datacenter1",
-  SCYLLA_KEYSPACE: "claude_platform",
+  SCYLLA_KEYSPACE: "cc_fleet",
   SCYLLA_USERNAME: "admin",
   SCYLLA_PASSWORD: "password",
   GITHUB_SCOPES: "read:user,repo",
@@ -73,7 +73,7 @@ describe("loadEnv", () => {
     vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
 
     const env = loadEnv()
-    expect(env.SCYLLA_KEYSPACE).toBe("claude_platform")
+    expect(env.SCYLLA_KEYSPACE).toBe("cc_fleet")
   })
 
   it("should apply default GITHUB_SCOPES", () => {

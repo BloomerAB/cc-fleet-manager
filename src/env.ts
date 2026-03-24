@@ -6,7 +6,7 @@ const envSchema = z.object({
   SCYLLA_HOST: z.string().default("scylla"),
   SCYLLA_PORT: z.coerce.number().default(9042),
   SCYLLA_DATACENTER: z.string().default("datacenter1"),
-  SCYLLA_KEYSPACE: z.string().default("claude_platform"),
+  SCYLLA_KEYSPACE: z.string().default("cc_fleet"),
   SCYLLA_USERNAME: z.string().optional(),
   SCYLLA_PASSWORD: z.string().optional(),
   JWT_SECRET: z.string(),

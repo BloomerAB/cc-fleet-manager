@@ -1,7 +1,7 @@
-CREATE KEYSPACE IF NOT EXISTS claude_platform
+CREATE KEYSPACE IF NOT EXISTS cc_fleet
 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 
-USE claude_platform;
+USE cc_fleet;
 
 -- Users table: stores GitHub OAuth tokens for git operations
 CREATE TABLE IF NOT EXISTS users (
