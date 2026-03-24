@@ -1,0 +1,42 @@
+name: "Build and Push"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Run Tests
+    uses: bloomerab/reusable-workflows/.github/workflows/test.yaml@main
+    with:
+      node-version: "24"
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  build-and-push:
+    name: Build and Push
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Build and push Docker image
+        uses: bloomerab/reusable-workflows/.github/actions/docker-build-push@main
+        with:
+          image-name: claude-session-manager
+          registry: ghcr.io
+          organization: bloomerab
+          build-context: "."
+          dockerfile-path: "./Dockerfile"
+          build-args: |
+            NPM_TOKEN=${{ secrets.NPM_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

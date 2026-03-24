@@ -79,7 +79,7 @@ const registerTaskRoutes = (
       maxTurns: session.maxTurns ?? DEFAULT_MAX_TURNS,
       maxBudgetUsd: session.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
       deadlineSeconds: session.deadlineSeconds ?? DEFAULT_DEADLINE_SECONDS,
-      managerWsUrl: `ws://session-manager.${env.RUNNER_NAMESPACE}.svc.cluster.local:${env.PORT}/ws/runner`,
+      managerWsUrl: `ws://claude-session-manager.${env.RUNNER_NAMESPACE}.svc.cluster.local:${env.PORT}/ws/runner`,
       githubToken,
     })
 
