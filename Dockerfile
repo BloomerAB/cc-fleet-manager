@@ -1,11 +1,5 @@
-# Dashboard build stage
-FROM node:24-alpine AS dashboard
-WORKDIR /dashboard
-ARG DASHBOARD_REPO=https://github.com/BloomerAB/cc-fleet-ui.git
-ARG DASHBOARD_REF=main
-RUN apk add --no-cache git \
-    && git clone --depth 1 --branch ${DASHBOARD_REF} ${DASHBOARD_REPO} .
-RUN npm ci && npm run build
+# Pull pre-built dashboard from cc-fleet-ui image
+FROM ghcr.io/bloomerab/cc-fleet-ui:latest AS dashboard
 
 # NPM stage (all deps for build)
 FROM node:24-alpine AS npm
@@ -38,7 +32,7 @@ RUN apk add --no-cache git \
 
 COPY --from=deps-prod /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-COPY --from=dashboard /dashboard/dist ./public
+COPY --from=dashboard /usr/share/nginx/html ./public
 COPY package.json ./
 
 USER appuser
