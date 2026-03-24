@@ -2,13 +2,12 @@
 FROM node:24-alpine AS dashboard
 WORKDIR /dashboard
 ARG NPM_TOKEN
-ARG DASHBOARD_REPO=https://github.com/BloomerAB/claude-dashboard.git
+ARG DASHBOARD_REPO=https://github.com/BloomerAB/cc-fleet-ui.git
 ARG DASHBOARD_REF=main
 RUN apk add --no-cache git \
     && REPO_HOST=$(echo "${DASHBOARD_REPO}" | sed 's|https://||') \
     && git clone --depth 1 --branch ${DASHBOARD_REF} \
        "https://x-access-token:${NPM_TOKEN}@${REPO_HOST}" .
-COPY .npmrc .npmrc
 RUN npm ci && npm run build
 
 # NPM stage (all deps for build)

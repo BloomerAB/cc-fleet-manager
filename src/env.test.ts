@@ -21,7 +21,7 @@ const ALL_ENV_VARS = {
   GITHUB_SCOPES: "read:user,repo",
   GIT_TOKEN: "ghp_test123",
   MAX_CONCURRENT_TASKS: "5",
-  WORKSPACE_BASE_DIR: "/tmp/claude-workspaces",
+  WORKSPACE_BASE_DIR: "/tmp/cc-fleet-workspaces",
   ALLOWED_REPOS: "github.com/bloomerab/*",
   CORS_ORIGIN: "http://localhost:5173",
 }
@@ -94,7 +94,7 @@ describe("loadEnv", () => {
     vi.stubGlobal("process", { ...process, env: { ...REQUIRED_ENV_VARS } })
 
     const env = loadEnv()
-    expect(env.WORKSPACE_BASE_DIR).toBe("/tmp/claude-workspaces")
+    expect(env.WORKSPACE_BASE_DIR).toBe("/tmp/cc-fleet-workspaces")
   })
 
   it("should apply default ALLOWED_REPOS as empty string", () => {

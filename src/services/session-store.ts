@@ -1,6 +1,6 @@
 import { types as cassandraTypes } from "cassandra-driver"
 import type { Client } from "cassandra-driver"
-import type { SessionStatus, SessionResult } from "@bloomerab/claude-types"
+import type { SessionStatus, SessionResult } from "@bloomerab/cc-fleet-types"
 
 interface RepoConfig {
   readonly url: string

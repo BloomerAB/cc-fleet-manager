@@ -37,7 +37,7 @@ const createMockEnv = (overrides?: Partial<Env>): Env => ({
   GITHUB_SCOPES: "read:user,repo",
   ANTHROPIC_API_KEY: "sk-ant-test",
   MAX_CONCURRENT_TASKS: 5,
-  WORKSPACE_BASE_DIR: "/tmp/claude-workspaces",
+  WORKSPACE_BASE_DIR: "/tmp/cc-fleet-workspaces",
   ALLOWED_REPOS: "",
   CORS_ORIGIN: "http://localhost:5173",
   ...overrides,

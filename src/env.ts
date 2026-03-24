@@ -16,7 +16,7 @@ const envSchema = z.object({
   GIT_TOKEN: z.string().optional(),
   ANTHROPIC_API_KEY: z.string(),
   MAX_CONCURRENT_TASKS: z.coerce.number().int().min(1).default(5),
-  WORKSPACE_BASE_DIR: z.string().default("/tmp/claude-workspaces"),
+  WORKSPACE_BASE_DIR: z.string().default("/tmp/cc-fleet-workspaces"),
   ALLOWED_REPOS: z.string().default(""),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
 })

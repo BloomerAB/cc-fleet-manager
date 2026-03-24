@@ -32,7 +32,7 @@ jobs:
       - name: Build and push Docker image
         uses: bloomerab/reusable-workflows/.github/actions/docker-build-push@main
         with:
-          image-name: claude-session-manager
+          image-name: cc-fleet-manager
           registry: ghcr.io
           organization: bloomerab
           build-context: "."
