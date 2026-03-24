@@ -1,7 +1,3 @@
-# Pull pre-built dashboard assets from cc-fleet-ui image
-ARG UI_IMAGE=ghcr.io/bloomerab/cc-fleet-ui:latest
-FROM ${UI_IMAGE} AS dashboard
-
 # NPM stage (all deps for build)
 FROM node:24-alpine AS npm
 WORKDIR /app
@@ -33,7 +29,6 @@ RUN apk add --no-cache git \
 
 COPY --from=deps-prod /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-COPY --from=dashboard /usr/share/nginx/html ./public
 COPY package.json ./
 
 USER appuser

@@ -1,10 +1,7 @@
-import { existsSync } from "node:fs"
-import { join } from "node:path"
 import Fastify from "fastify"
 import fastifyWebsocket from "@fastify/websocket"
 import fastifyCors from "@fastify/cors"
 import fastifyJwt from "@fastify/jwt"
-import fastifyStatic from "@fastify/static"
 import { loadEnv } from "./env.js"
 import { createDbClient } from "./db/client.js"
 import { createSessionStore } from "./services/session-store.js"
@@ -15,8 +12,6 @@ import { registerAuthRoutes } from "./routes/auth.js"
 import { registerTaskRoutes } from "./routes/tasks.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
 import { registerSettingsRoutes } from "./routes/settings.js"
-
-const STATIC_DIR = join(import.meta.dirname, "../public")
 
 const main = async () => {
   const env = loadEnv()
@@ -52,27 +47,6 @@ const main = async () => {
   app.get("/healthz", async () => ({ status: "ok" }))
   app.get("/health", async () => ({ status: "ok" }))
 
-  // Serve dashboard SPA if public/ dir exists
-  if (existsSync(STATIC_DIR)) {
-    await app.register(fastifyStatic, {
-      root: STATIC_DIR,
-      prefix: "/",
-      wildcard: false,
-    })
-
-    app.setNotFoundHandler(async (request, reply) => {
-      if (
-        request.url.startsWith("/api/") ||
-        request.url.startsWith("/ws/") ||
-        request.url.startsWith("/healthz") ||
-        request.url.startsWith("/health")
-      ) {
-        return reply.status(404).send({ success: false, error: "Not found" })
-      }
-      return reply.sendFile("index.html")
-    })
-  }
-
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     app.log.info(`Received ${signal}, shutting down gracefully`)
@@ -86,7 +60,7 @@ const main = async () => {
 
   // Start
   await app.listen({ port: env.PORT, host: env.HOST })
-  app.log.info(`Claude Platform listening on ${env.HOST}:${env.PORT}`)
+  app.log.info(`CC Fleet Manager listening on ${env.HOST}:${env.PORT}`)
 }
 
 main().catch((error) => {
