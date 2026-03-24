@@ -5,7 +5,9 @@ ARG NPM_TOKEN
 ARG DASHBOARD_REPO=https://github.com/BloomerAB/claude-dashboard.git
 ARG DASHBOARD_REF=main
 RUN apk add --no-cache git \
-    && git clone --depth 1 --branch ${DASHBOARD_REF} ${DASHBOARD_REPO} .
+    && REPO_HOST=$(echo "${DASHBOARD_REPO}" | sed 's|https://||') \
+    && git clone --depth 1 --branch ${DASHBOARD_REF} \
+       "https://x-access-token:${NPM_TOKEN}@${REPO_HOST}" .
 COPY .npmrc .npmrc
 RUN npm ci && npm run build
 
