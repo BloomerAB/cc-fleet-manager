@@ -35,6 +35,7 @@ export type RepoSource = DirectRepoSource | OrgRepoSource | DiscoveryRepoSource
 export interface TaskConfig {
   readonly prompt: string
   readonly repoSource: RepoSource
+  readonly rules?: string
   readonly maxTurns?: number
   readonly maxBudgetUsd?: number
   readonly deadlineSeconds?: number
@@ -47,6 +48,7 @@ export interface Session {
   readonly prompt: string
   readonly repoSource: RepoSource
   readonly repos: readonly RepoConfig[]
+  readonly rules: string | null
   readonly maxTurns: number
   readonly maxBudgetUsd: number
   readonly deadlineSeconds: number

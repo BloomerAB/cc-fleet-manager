@@ -8,6 +8,7 @@ interface JwtPayload {
 
 const updateSettingsSchema = z.object({
   anthropicApiKey: z.string().min(1).optional(),
+  rules: z.string().max(10000).optional(),
 })
 
 const registerSettingsRoutes = (app: FastifyInstance, userStore: UserStore) => {
@@ -31,6 +32,7 @@ const registerSettingsRoutes = (app: FastifyInstance, userStore: UserStore) => {
       success: true,
       data: {
         hasAnthropicKey: dbUser?.anthropicApiKey !== null && dbUser?.anthropicApiKey !== undefined,
+        rules: dbUser?.rules ?? "",
       },
     }
   })
@@ -42,6 +44,9 @@ const registerSettingsRoutes = (app: FastifyInstance, userStore: UserStore) => {
 
     if (body.anthropicApiKey !== undefined) {
       await userStore.setAnthropicApiKey(user.sub, body.anthropicApiKey)
+    }
+    if (body.rules !== undefined) {
+      await userStore.setRules(user.sub, body.rules || null)
     }
 
     return { success: true }

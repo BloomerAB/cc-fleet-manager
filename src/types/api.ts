@@ -18,6 +18,7 @@ export interface PaginationMeta {
 export interface CreateTaskRequest {
   readonly prompt: string
   readonly repoSource: RepoSource
+  readonly rules?: string
   readonly maxTurns?: number
   readonly maxBudgetUsd?: number
 }

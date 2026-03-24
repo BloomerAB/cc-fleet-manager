@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   access_token TEXT,
   token_scopes TEXT,
   anthropic_api_key TEXT,
+  rules TEXT,
   created_at TIMESTAMP,
   updated_at TIMESTAMP,
   PRIMARY KEY (id)
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   prompt TEXT,
   repo_source TEXT,
   repos TEXT,
+  rules TEXT,
   max_turns INT,
   max_budget_usd FLOAT,
   deadline_seconds INT,

@@ -6,6 +6,7 @@ interface CreateSessionInput {
   readonly userId: string
   readonly prompt: string
   readonly repoSource: RepoSource
+  readonly rules?: string
   readonly maxTurns?: number
   readonly maxBudgetUsd?: number
 }
@@ -17,6 +18,7 @@ interface Session {
   readonly prompt: string
   readonly repoSource: RepoSource
   readonly repos: readonly RepoConfig[]
+  readonly rules: string | null
   readonly maxTurns: number
   readonly maxBudgetUsd: number
   readonly deadlineSeconds: number
@@ -59,6 +61,7 @@ const rowToSession = (row: cassandraTypes.Row): Session => ({
   prompt: row.prompt,
   repoSource: parseRepoSource(row.repo_source),
   repos: row.repos ? JSON.parse(row.repos) : [],
+  rules: row.rules ?? null,
   maxTurns: row.max_turns,
   maxBudgetUsd: row.max_budget_usd,
   deadlineSeconds: row.deadline_seconds,
@@ -88,13 +91,14 @@ const createSessionStore = (client: Client) => ({
 
     await client.execute(
       `INSERT INTO sessions (
-        user_id, id, status, prompt, repo_source, repos,
+        user_id, id, status, prompt, repo_source, repos, rules,
         max_turns, max_budget_usd, deadline_seconds, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.userId, id, "queued", input.prompt,
         JSON.stringify(input.repoSource),
         JSON.stringify(initialRepos),
+        input.rules ?? null,
         maxTurns, maxBudgetUsd, DEFAULT_DEADLINE_SECONDS, now, now,
       ],
       { prepare: true },
@@ -107,6 +111,7 @@ const createSessionStore = (client: Client) => ({
       prompt: input.prompt,
       repoSource: input.repoSource,
       repos: initialRepos,
+      rules: input.rules ?? null,
       maxTurns,
       maxBudgetUsd,
       deadlineSeconds: DEFAULT_DEADLINE_SECONDS,
@@ -192,6 +197,32 @@ const createSessionStore = (client: Client) => ({
       values,
       { prepare: true },
     )
+  },
+
+  deleteSession: async (id: string, userId: string): Promise<boolean> => {
+    // Look up to get created_at (needed for partition key)
+    const result = await client.execute(
+      "SELECT created_at FROM sessions WHERE id = ? AND user_id = ? ALLOW FILTERING",
+      [cassandraTypes.Uuid.fromString(id), userId],
+      { prepare: true },
+    )
+    const row = result.first()
+    if (!row) return false
+
+    await client.execute(
+      "DELETE FROM sessions WHERE user_id = ? AND created_at = ? AND id = ?",
+      [userId, row.created_at, cassandraTypes.Uuid.fromString(id)],
+      { prepare: true },
+    )
+
+    // Best-effort cleanup of messages
+    await client.execute(
+      "DELETE FROM session_messages WHERE session_id = ?",
+      [cassandraTypes.Uuid.fromString(id)],
+      { prepare: true },
+    ).catch(() => {})
+
+    return true
   },
 
   addMessage: async (

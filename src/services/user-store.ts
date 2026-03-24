@@ -9,6 +9,7 @@ interface User {
   readonly accessToken: string
   readonly tokenScopes: string
   readonly anthropicApiKey: string | null
+  readonly rules: string | null
   readonly createdAt: Date
   readonly updatedAt: Date
 }
@@ -47,7 +48,7 @@ const createUserStore = (client: Client) => ({
 
     // Fetch to get current anthropic_api_key (preserved from previous session)
     const existing = await client.execute(
-      "SELECT anthropic_api_key FROM users WHERE id = ?",
+      "SELECT anthropic_api_key, rules FROM users WHERE id = ?",
       [input.id],
       { prepare: true },
     )
@@ -55,6 +56,7 @@ const createUserStore = (client: Client) => ({
     return {
       ...input,
       anthropicApiKey: existing.first()?.anthropic_api_key ?? null,
+      rules: existing.first()?.rules ?? null,
       createdAt: now,
       updatedAt: now,
     }
@@ -78,6 +80,7 @@ const createUserStore = (client: Client) => ({
       accessToken: row.access_token,
       tokenScopes: row.token_scopes,
       anthropicApiKey: row.anthropic_api_key ?? null,
+      rules: row.rules ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }
@@ -107,6 +110,24 @@ const createUserStore = (client: Client) => ({
     await client.execute(
       "UPDATE users SET anthropic_api_key = ?, updated_at = ? WHERE id = ?",
       [apiKey, new Date(), userId],
+      { prepare: true },
+    )
+  },
+
+  getRules: async (userId: string): Promise<string | null> => {
+    const result = await client.execute(
+      "SELECT rules FROM users WHERE id = ?",
+      [userId],
+      { prepare: true },
+    )
+    const row = result.first()
+    return row?.rules ?? null
+  },
+
+  setRules: async (userId: string, rules: string | null): Promise<void> => {
+    await client.execute(
+      "UPDATE users SET rules = ?, updated_at = ? WHERE id = ?",
+      [rules, new Date(), userId],
       { prepare: true },
     )
   },

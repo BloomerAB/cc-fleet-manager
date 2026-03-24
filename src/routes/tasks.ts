@@ -45,6 +45,7 @@ const repoSourceSchema = z.discriminatedUnion("mode", [
 const createTaskSchema = z.object({
   prompt: z.string().min(1).max(MAX_PROMPT_LENGTH),
   repoSource: repoSourceSchema,
+  rules: z.string().max(5000).optional(),
   maxTurns: z.number().int().min(1).max(MAX_TURNS_LIMIT).optional(),
   maxBudgetUsd: z.number().min(MIN_BUDGET_USD).max(MAX_BUDGET_USD).optional(),
 })
@@ -124,6 +125,7 @@ const registerTaskRoutes = (
       userId: user.sub,
       prompt: body.prompt,
       repoSource: body.repoSource,
+      rules: body.rules,
       maxTurns: body.maxTurns,
       maxBudgetUsd: body.maxBudgetUsd,
     })
@@ -201,6 +203,28 @@ const registerTaskRoutes = (
     })
 
     return { success: true, data: { cancelled: true } }
+  })
+
+  // DELETE /api/tasks/:id — delete a session
+  app.delete("/api/tasks/:id", async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const user = request.user as JwtPayload
+
+    // Don't allow deleting running tasks
+    const session = await sessionStore.findById(id, user.sub)
+    if (!session) {
+      return reply.status(404).send({ success: false, error: "Task not found" })
+    }
+    if (session.status === "running") {
+      return reply.status(400).send({ success: false, error: "Cannot delete a running task. Cancel it first." })
+    }
+
+    const deleted = await sessionStore.deleteSession(id, user.sub)
+    if (!deleted) {
+      return reply.status(404).send({ success: false, error: "Task not found" })
+    }
+
+    return { success: true, data: { deleted: true } }
   })
 
   // GET /api/tasks/:id/messages — get session messages

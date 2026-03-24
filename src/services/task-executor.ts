@@ -160,21 +160,40 @@ const createTaskExecutor = (
     await writeFile(join(workspaceDir, ".git-credentials"), credentials, { mode: 0o600 })
   }
 
+  const PLATFORM_RULES = `# CC Fleet — Platform Rules
+
+You are running as an autonomous agent via CC Fleet.
+Git credentials are pre-configured — use \`git push\` directly.
+
+## Workflow
+- Always create a feature branch from the default branch before making changes
+- Use conventional commits (feat:, fix:, refactor:, docs:, test:, chore:)
+- Create a pull request when code changes are made — never push directly to main
+- Run tests before committing if a test framework is configured
+- Keep commits small and focused — one logical change per commit
+
+## Quality
+- Read existing code before modifying — understand conventions first
+- Follow the project's existing code style and patterns
+- Add tests for new functionality when a test framework exists
+- Do not leave debug logs, commented-out code, or TODOs
+
+## Safety
+- Never hardcode secrets, API keys, or credentials
+- Never run destructive commands (rm -rf, DROP TABLE, force push) without confirmation
+- If something is unclear or risky, stop and ask the user`
+
   const buildSystemPrompt = (
     repoSource: RepoSource,
     availableRepos: readonly GhRepo[] | null,
+    userRules: string | null,
+    taskRules: string | null,
   ): string => {
-    const parts = [
-      "You are running as an autonomous agent via CC Fleet.",
-      "Complete the task. Create a PR if code changes are made.",
-      "Use `git push` after committing — the credentials are pre-configured.",
-    ]
+    const sections: string[] = [PLATFORM_RULES]
 
-    if (repoSource.mode === "direct") {
-      // Nothing extra needed — repos are pre-cloned
-    } else if (repoSource.mode === "org" && availableRepos) {
-      parts.push(
-        "",
+    // Repo discovery context
+    if (repoSource.mode === "org" && availableRepos) {
+      sections.push([
         `## Available repositories (${repoSource.org})`,
         "",
         "These repos matched the filter. They are NOT yet cloned.",
@@ -183,10 +202,9 @@ const createTaskExecutor = (
         ...availableRepos.map(
           (r) => `- **${r.name}** (${r.language ?? "unknown"}) — ${r.description ?? "no description"} → ${r.clone_url}`,
         ),
-      )
+      ].join("\n"))
     } else if (repoSource.mode === "discovery" && availableRepos) {
-      parts.push(
-        "",
+      sections.push([
         `## Repository discovery mode (${repoSource.org})`,
         "",
         "Below is the full list of repos in this org. Analyze the task and decide which repos are relevant.",
@@ -196,10 +214,20 @@ const createTaskExecutor = (
         ...availableRepos.map(
           (r) => `- **${r.name}** (${r.language ?? "unknown"}) — ${r.description ?? "no description"} → ${r.clone_url}`,
         ),
-      )
+      ].join("\n"))
     }
 
-    return parts.join("\n")
+    // User rules (from settings — always applied)
+    if (userRules?.trim()) {
+      sections.push(`# User Rules\n\n${userRules.trim()}`)
+    }
+
+    // Task-specific rules (per-task overrides)
+    if (taskRules?.trim()) {
+      sections.push(`# Task Rules\n\n${taskRules.trim()}`)
+    }
+
+    return sections.join("\n\n")
   }
 
   const cleanupWorkspace = async (workspaceDir: string): Promise<void> => {
@@ -352,7 +380,9 @@ const createTaskExecutor = (
       // SDK reads ANTHROPIC_API_KEY from env
       process.env.ANTHROPIC_API_KEY = anthropicKey
 
-      const systemPrompt = buildSystemPrompt(session.repoSource, availableRepos)
+      // Fetch user rules from settings
+      const userRules = await userStore.getRules(userId)
+      const systemPrompt = buildSystemPrompt(session.repoSource, availableRepos, userRules, session.rules)
 
       const result = query({
         prompt: session.prompt,

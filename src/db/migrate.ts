@@ -13,6 +13,14 @@ const migrations: readonly Migration[] = [
     name: "001_add_repo_source",
     statements: ["ALTER TABLE sessions ADD repo_source TEXT"],
   },
+  {
+    version: 2,
+    name: "002_add_rules",
+    statements: [
+      "ALTER TABLE users ADD rules TEXT",
+      "ALTER TABLE sessions ADD rules TEXT",
+    ],
+  },
 ]
 
 const ensureVersionTable = async (client: Client): Promise<void> => {
