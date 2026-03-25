@@ -69,6 +69,8 @@ const createMockUserStore = (): UserStore => ({
   setRules: vi.fn(),
   getClaudeSettings: vi.fn().mockResolvedValue(null),
   setClaudeSettings: vi.fn(),
+  getKubeconfig: vi.fn().mockResolvedValue(null),
+  setKubeconfig: vi.fn(),
 })
 
 const createMockWsManager = (): WsManager => ({
