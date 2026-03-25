@@ -149,6 +149,41 @@ const registerTaskRoutes = (
     return { success: true, data: session }
   })
 
+  // POST /api/tasks/:id/resume — resume a completed/failed session
+  app.post("/api/tasks/:id/resume", async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const user = request.user as JwtPayload
+
+    const originalSession = await sessionStore.findById(id, user.sub)
+    if (!originalSession) {
+      return reply.status(404).send({ success: false, error: "Task not found" })
+    }
+    if (!originalSession.cliSessionId) {
+      return reply.status(400).send({ success: false, error: "Session has no CLI session ID — cannot resume. Use retry instead." })
+    }
+    if (originalSession.status === "running" || originalSession.status === "waiting_for_input") {
+      return reply.status(400).send({ success: false, error: "Session is still active" })
+    }
+
+    // Create a new fleet session linked to the original
+    const newSession = await sessionStore.create({
+      userId: user.sub,
+      prompt: `[Resumed from session ${id}] ${originalSession.prompt}`,
+      repoSource: originalSession.repoSource,
+      rules: originalSession.rules ?? undefined,
+      permissionMode: originalSession.permissionMode,
+      model: originalSession.model,
+      maxTurns: originalSession.maxTurns,
+    })
+
+    // Execute with resume — pass the CLI session ID
+    taskExecutor.executeTask(newSession.id, user.sub, originalSession.cliSessionId).catch((error) => {
+      app.log.error({ error, sessionId: newSession.id }, "Resume execution failed")
+    })
+
+    return { success: true, data: newSession }
+  })
+
   // GET /api/tasks — list user's tasks
   app.get("/api/tasks", async (request) => {
     const query = listQuerySchema.parse(request.query)

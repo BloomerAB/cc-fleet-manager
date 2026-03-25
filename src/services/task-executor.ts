@@ -461,7 +461,7 @@ Git credentials are pre-configured — use \`git push\` directly.
     }
   }
 
-  const executeTask = async (sessionId: string, userId: string): Promise<void> => {
+  const executeTask = async (sessionId: string, userId: string, resumeCliSessionId?: string): Promise<void> => {
     const session = await sessionStore.findById(sessionId, userId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
 
@@ -558,20 +558,28 @@ Git credentials are pre-configured — use \`git push\` directly.
       // Build system prompt
       const systemPrompt = buildSystemPrompt(session.repoSource, availableRepos, userRules, session.rules)
 
-      // Build environment
+      // Write kubeconfig if user has one configured
+      const kubeconfig = await userStore.getKubeconfig(userId)
+      if (kubeconfig) {
+        const kubeDir = join(workspaceDir, ".kube")
+        await mkdir(kubeDir, { recursive: true })
+        await writeFile(join(kubeDir, "config"), kubeconfig, { mode: 0o600 })
+      }
+
+      // Build environment — HOME is always /home/appuser for session persistence
       const spawnEnv: Record<string, string | undefined> = {
         ...process.env,
         SHELL: "/bin/sh",
+        HOME: "/home/appuser",
         GIT_CONFIG_GLOBAL: join(workspaceDir, ".gitconfig"),
+        KUBECONFIG: kubeconfig ? join(workspaceDir, ".kube", "config") : undefined,
         CLAUDE_AGENT_SDK_CLIENT_APP: "cc-fleet/0.3.0",
       }
 
       if (env.AUTH_MODE === "apiKey" && anthropicKey) {
         spawnEnv.ANTHROPIC_API_KEY = anthropicKey
-        spawnEnv.HOME = workspaceDir
       } else {
         delete spawnEnv.ANTHROPIC_API_KEY
-        spawnEnv.HOME = "/home/appuser"
       }
 
       // Map permission mode — SDK uses "bypassPermissions" differently
@@ -582,30 +590,49 @@ Git credentials are pre-configured — use \`git push\` directly.
       // Create input queue — keeps the SDK process alive until we close it
       const { stream: inputStream, queue: inputQueue } = createInputQueue()
 
-      // Push the initial prompt as the first message
-      inputQueue.push({
-        type: "user",
-        message: { role: "user", content: session.prompt },
-        parent_tool_use_id: null,
-        session_id: sessionId,
-      })
+      const sdkOptions = {
+        cwd: workspaceDir,
+        systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: systemPrompt },
+        maxTurns: session.maxTurns,
+        model: session.model === "opus" ? "claude-opus-4-6" : "claude-sonnet-4-6",
+        permissionMode: sdkPermissionMode,
+        allowedTools: [
+          "Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch",
+        ],
+        env: spawnEnv,
+        abortController: new AbortController(),
+      }
 
-      console.log(`[fleet] Creating SDK query for session ${sessionId}, model=${session.model}, cwd=${workspaceDir}`)
-      const q = query({
-        prompt: inputStream,
-        options: {
-          cwd: workspaceDir,
-          systemPrompt: { type: "preset", preset: "claude_code", append: systemPrompt },
-          maxTurns: session.maxTurns,
-          model: session.model === "opus" ? "claude-opus-4-6" : "claude-sonnet-4-6",
-          permissionMode: sdkPermissionMode,
-          allowedTools: [
-            "Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch",
-          ],
-          env: spawnEnv,
-          abortController: new AbortController(),
-        },
-      })
+      let q: Query
+      if (resumeCliSessionId) {
+        // Resume mode: load conversation history, then wait for follow-up input
+        console.log(`[fleet] Resuming SDK session ${resumeCliSessionId} for fleet session ${sessionId}`)
+        q = query({
+          prompt: inputStream,
+          options: { ...sdkOptions, resume: resumeCliSessionId },
+        })
+        // Don't push initial message — the conversation history is loaded from the JSONL
+        // Push a continuation prompt instead
+        inputQueue.push({
+          type: "user",
+          message: { role: "user", content: "I'm back. Continue where we left off — what's the status and what should we do next?" },
+          parent_tool_use_id: null,
+          session_id: resumeCliSessionId,
+        })
+      } else {
+        // New session: push the initial prompt
+        console.log(`[fleet] Creating SDK query for session ${sessionId}, model=${session.model}, cwd=${workspaceDir}`)
+        inputQueue.push({
+          type: "user",
+          message: { role: "user", content: session.prompt },
+          parent_tool_use_id: null,
+          session_id: sessionId,
+        })
+        q = query({
+          prompt: inputStream,
+          options: sdkOptions,
+        })
+      }
 
       // Create session context
       const ctx: SessionContext = {

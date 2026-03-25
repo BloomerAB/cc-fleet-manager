@@ -37,6 +37,13 @@ const migrations: readonly Migration[] = [
       "ALTER TABLE users ADD claude_settings TEXT",
     ],
   },
+  {
+    version: 5,
+    name: "005_add_kubeconfig",
+    statements: [
+      "ALTER TABLE users ADD kubeconfig TEXT",
+    ],
+  },
 ]
 
 const ensureVersionTable = async (client: Client): Promise<void> => {

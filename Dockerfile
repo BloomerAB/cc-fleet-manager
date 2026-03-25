@@ -32,6 +32,7 @@ RUN apk add --no-cache \
     ripgrep \
     python3 \
     helm \
+    kubectl \
     && addgroup -g 1001 -S nodejs \
     && adduser -S appuser -u 1001 -h /home/appuser \
     && npm install -g @anthropic-ai/claude-code

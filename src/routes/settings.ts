@@ -11,6 +11,7 @@ const updateSettingsSchema = z.object({
   anthropicApiKey: z.string().min(1).optional(),
   rules: z.string().max(10000).optional(),
   claudeSettings: z.string().max(10000).optional(),
+  kubeconfig: z.string().max(50000).optional(),
 })
 
 const registerSettingsRoutes = (app: FastifyInstance, env: Env, userStore: UserStore) => {
@@ -37,6 +38,7 @@ const registerSettingsRoutes = (app: FastifyInstance, env: Env, userStore: UserS
         hasAnthropicKey: dbUser?.anthropicApiKey !== null && dbUser?.anthropicApiKey !== undefined,
         rules: dbUser?.rules ?? "",
         claudeSettings: dbUser?.claudeSettings ?? "",
+        hasKubeconfig: dbUser?.kubeconfig !== null && dbUser?.kubeconfig !== undefined,
       },
     }
   })
@@ -54,6 +56,9 @@ const registerSettingsRoutes = (app: FastifyInstance, env: Env, userStore: UserS
     }
     if (body.claudeSettings !== undefined) {
       await userStore.setClaudeSettings(user.sub, body.claudeSettings || null)
+    }
+    if (body.kubeconfig !== undefined) {
+      await userStore.setKubeconfig(user.sub, body.kubeconfig || null)
     }
 
     return { success: true }
