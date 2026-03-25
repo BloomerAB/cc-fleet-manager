@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
 import type { UserStore } from "../services/user-store.js"
+import type { Env } from "../env.js"
 
 interface JwtPayload {
   readonly sub: string
@@ -12,7 +13,7 @@ const updateSettingsSchema = z.object({
   claudeSettings: z.string().max(10000).optional(),
 })
 
-const registerSettingsRoutes = (app: FastifyInstance, userStore: UserStore) => {
+const registerSettingsRoutes = (app: FastifyInstance, env: Env, userStore: UserStore) => {
   // Auth hook
   app.addHook("onRequest", async (request, reply) => {
     if (request.url.startsWith("/api/settings")) {
@@ -32,6 +33,7 @@ const registerSettingsRoutes = (app: FastifyInstance, userStore: UserStore) => {
     return {
       success: true,
       data: {
+        authMode: env.AUTH_MODE,
         hasAnthropicKey: dbUser?.anthropicApiKey !== null && dbUser?.anthropicApiKey !== undefined,
         rules: dbUser?.rules ?? "",
         claudeSettings: dbUser?.claudeSettings ?? "",

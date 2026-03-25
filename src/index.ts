@@ -44,7 +44,7 @@ const main = async () => {
   registerAuthRoutes(app, env, userStore)
   registerTaskRoutes(app, env, sessionStore, userStore, taskExecutor, wsManager)
   registerSessionRoutes(app, wsManager, sessionStore, taskExecutor)
-  registerSettingsRoutes(app, userStore)
+  registerSettingsRoutes(app, env, userStore)
   registerGitHubRoutes(app, userStore)
 
   // Health checks

@@ -418,6 +418,8 @@ Git credentials are pre-configured — use \`git push\` directly.
         spawnEnv.HOME = workspaceDir
       } else {
         // subscription mode: HOME stays at /home/appuser (PVC mount with credentials)
+        // Explicitly remove any stale API key so CLI uses OAuth
+        delete spawnEnv.ANTHROPIC_API_KEY
         spawnEnv.HOME = "/home/appuser"
       }
 
