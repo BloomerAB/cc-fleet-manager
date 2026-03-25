@@ -214,13 +214,17 @@ const registerTaskRoutes = (
     const { id } = request.params as { id: string }
     const user = request.user as JwtPayload
 
-    // Don't allow deleting running tasks
     const session = await sessionStore.findById(id, user.sub)
     if (!session) {
       return reply.status(404).send({ success: false, error: "Task not found" })
     }
     if (session.status === "running") {
       return reply.status(400).send({ success: false, error: "Cannot delete a running task. Cancel it first." })
+    }
+
+    // Clean up active session context if waiting_for_input
+    if (session.status === "waiting_for_input") {
+      taskExecutor.cancelTask(id)
     }
 
     const deleted = await sessionStore.deleteSession(id, user.sub)
