@@ -159,10 +159,32 @@ const registerTaskRoutes = (
       return reply.status(404).send({ success: false, error: "Task not found" })
     }
     if (!originalSession.cliSessionId) {
-      return reply.status(400).send({ success: false, error: "Session has no CLI session ID — cannot resume. Use retry instead." })
+      return reply.status(400).send({ success: false, error: "No conversation history — use Retry instead." })
     }
     if (originalSession.status === "running" || originalSession.status === "waiting_for_input") {
       return reply.status(400).send({ success: false, error: "Session is still active" })
+    }
+
+    // Check if session JSONL exists (HOME must have been /home/appuser)
+    const { existsSync } = await import("node:fs")
+    const { readdirSync } = await import("node:fs")
+    const claudeProjectsDir = "/home/appuser/.claude/projects"
+    let sessionFileExists = false
+    try {
+      if (existsSync(claudeProjectsDir)) {
+        for (const dir of readdirSync(claudeProjectsDir)) {
+          const jsonlPath = `${claudeProjectsDir}/${dir}/${originalSession.cliSessionId}.jsonl`
+          if (existsSync(jsonlPath)) {
+            sessionFileExists = true
+            break
+          }
+        }
+      }
+    } catch {
+      // Best effort
+    }
+    if (!sessionFileExists) {
+      return reply.status(400).send({ success: false, error: "Conversation history not found on this pod — use Retry instead." })
     }
 
     // Create a new fleet session linked to the original
