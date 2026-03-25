@@ -289,10 +289,9 @@ Git credentials are pre-configured — use \`git push\` directly.
     return { text, toolBlocks }
   }
 
-  /** Stream a single turn of the conversation */
-  const streamTurn = async (ctx: SessionContext): Promise<void> => {
-    activeTurns.add(ctx.sessionId)
-    console.log(`[fleet] streamTurn started for session ${ctx.sessionId}`)
+  /** Run the SDK message loop for the entire session lifetime (background) */
+  const runSessionLoop = async (ctx: SessionContext): Promise<void> => {
+    console.log(`[fleet] Session loop started for ${ctx.sessionId}`)
 
     try {
       for await (const msg of ctx.query!) {
@@ -324,7 +323,6 @@ Git credentials are pre-configured — use \`git push\` directly.
             sessionStore.addMessage(ctx.sessionId, "tool", tool.input, tool.name).catch(() => {})
           }
 
-          // Capture CLI session ID
           if (!ctx.cliSessionId && sdkMsg.session_id) {
             ctx.cliSessionId = sdkMsg.session_id
             sessionStore.updateCliSessionId(ctx.sessionId, sdkMsg.session_id).catch(() => {})
@@ -338,6 +336,27 @@ Git credentials are pre-configured — use \`git push\` directly.
             ctx.cliSessionId = result.session_id
             sessionStore.updateCliSessionId(ctx.sessionId, result.session_id).catch(() => {})
           }
+
+          // Turn completed — signal waiting_for_input
+          ctx.lastActivityAt = Date.now()
+          activeTurns.delete(ctx.sessionId)
+          const turnResult = {
+            success: true,
+            summary: "Turn completed",
+            costUsd: ctx.totalCostUsd,
+            turnsUsed: ctx.totalTurnsUsed,
+          }
+          await sessionStore.updateStatus(ctx.sessionId, "waiting_for_input", { result: turnResult })
+          wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+            type: "session_update",
+            sessionId: ctx.sessionId,
+            status: "waiting_for_input",
+          })
+          wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+            type: "result",
+            sessionId: ctx.sessionId,
+            result: turnResult,
+          })
         } else if (sdkMsg.type === "system" && "subtype" in sdkMsg && sdkMsg.subtype === "init") {
           wsManager.emitToSession(ctx.sessionId, ctx.userId, {
             type: "output",
@@ -348,25 +367,44 @@ Git credentials are pre-configured — use \`git push\` directly.
         }
       }
 
-      // Turn completed — set waiting_for_input with accumulated cost
-      ctx.lastActivityAt = Date.now()
-      const turnResult = {
-        success: true,
-        summary: "Turn completed",
-        costUsd: ctx.totalCostUsd,
-        turnsUsed: ctx.totalTurnsUsed,
+      // Iterator finished — session process exited
+      console.log(`[fleet] Session loop ended for ${ctx.sessionId}`)
+      if (sessionContexts.has(ctx.sessionId)) {
+        const finalResult = {
+          success: true,
+          summary: "Session completed",
+          costUsd: ctx.totalCostUsd,
+          turnsUsed: ctx.totalTurnsUsed,
+        }
+        await sessionStore.updateStatus(ctx.sessionId, "completed", { result: finalResult })
+        wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+          type: "session_update",
+          sessionId: ctx.sessionId,
+          status: "completed",
+        })
+        wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+          type: "result",
+          sessionId: ctx.sessionId,
+          result: finalResult,
+        })
+        sessionContexts.delete(ctx.sessionId)
+        await cleanupWorkspace(ctx.workspaceDir)
       }
-      await sessionStore.updateStatus(ctx.sessionId, "waiting_for_input", { result: turnResult })
-      wsManager.emitToSession(ctx.sessionId, ctx.userId, {
-        type: "session_update",
-        sessionId: ctx.sessionId,
-        status: "waiting_for_input",
-      })
-      wsManager.emitToSession(ctx.sessionId, ctx.userId, {
-        type: "result",
-        sessionId: ctx.sessionId,
-        result: turnResult,
-      })
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error(`[fleet] Session loop error for ${ctx.sessionId}: ${errorMessage}`)
+      if (sessionContexts.has(ctx.sessionId)) {
+        await sessionStore.updateStatus(ctx.sessionId, "failed", {
+          result: { success: false, summary: `Error: ${errorMessage}` },
+        })
+        wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+          type: "session_update",
+          sessionId: ctx.sessionId,
+          status: "failed",
+        })
+        sessionContexts.delete(ctx.sessionId)
+        await cleanupWorkspace(ctx.workspaceDir)
+      }
     } finally {
       activeTurns.delete(ctx.sessionId)
     }
@@ -521,8 +559,11 @@ Git credentials are pre-configured — use \`git push\` directly.
       }
       sessionContexts.set(sessionId, ctx)
 
-      // Stream the first turn
-      await streamTurn(ctx)
+      // Run the session loop in the background — it handles all turns
+      activeTurns.add(sessionId)
+      runSessionLoop(ctx).catch((error) => {
+        console.error(`[fleet] Background session loop failed for ${sessionId}: ${error}`)
+      })
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       await sessionStore.updateStatus(sessionId, "failed", {
@@ -556,6 +597,7 @@ Git credentials are pre-configured — use \`git push\` directly.
     if (activeTurns.has(sessionId)) throw new Error(`Session ${sessionId} already has a running turn`)
 
     ctx.lastActivityAt = Date.now()
+    activeTurns.add(sessionId)
 
     // Update status
     await sessionStore.updateStatus(sessionId, "running")
@@ -574,7 +616,7 @@ Git credentials are pre-configured — use \`git push\` directly.
     })
     await sessionStore.addMessage(sessionId, "user", text)
 
-    // Stream the follow-up message to the running query
+    // Inject follow-up via streamInput — the background loop handles the response
     const userMsg = {
       type: "user" as const,
       message: { role: "user" as const, content: text },
@@ -583,28 +625,21 @@ Git credentials are pre-configured — use \`git push\` directly.
     }
 
     try {
-      // Use streamInput to send the follow-up
       await ctx.query.streamInput((async function* () {
         yield userMsg
       })())
-
-      // Stream the response
-      await streamTurn(ctx)
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error(`[fleet] streamInput failed for ${sessionId}: ${errorMessage}`)
+      activeTurns.delete(sessionId)
       await sessionStore.updateStatus(sessionId, "failed", {
-        result: { success: false, summary: `Error: ${errorMessage}` },
+        result: { success: false, summary: `Follow-up failed: ${errorMessage}` },
       })
       wsManager.emitToSession(sessionId, userId, {
         type: "session_update",
         sessionId,
         status: "failed",
       })
-
-      // Cleanup on failure
-      try { ctx.query.close() } catch { /* */ }
-      sessionContexts.delete(sessionId)
-      await cleanupWorkspace(ctx.workspaceDir)
     }
   }
 

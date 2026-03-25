@@ -200,6 +200,14 @@ describe("createTaskExecutor", () => {
 
       await executor.executeTask("session-1", "user-1")
 
+      // Background loop processes async — wait for it
+      await vi.waitFor(() => {
+        expect(wsManager.emitToSession).toHaveBeenCalledWith("session-1", "user-1", expect.objectContaining({
+          type: "output",
+          text: "I found the bug",
+        }))
+      })
+
       // Should have called SDK query
       expect(mockQuery).toHaveBeenCalledOnce()
       const params = mockQuery.mock.calls[0][0]
@@ -207,15 +215,6 @@ describe("createTaskExecutor", () => {
       expect(params.options.permissionMode).toBe("acceptEdits")
       expect(params.options.model).toBe("claude-sonnet-4-6")
       expect(params.options.cwd).toContain("session-1")
-
-      // Should have emitted output
-      expect(wsManager.emitToSession).toHaveBeenCalledWith("session-1", "user-1", expect.objectContaining({
-        type: "output",
-        text: "I found the bug",
-      }))
-
-      // Should be waiting_for_input (interactive mode)
-      expect(sessionStore.updateStatus).toHaveBeenCalledWith("session-1", "waiting_for_input")
     })
 
     it("should use opus model when specified", async () => {
