@@ -1,4 +1,4 @@
-import type { Session, RepoSource } from "./session.js"
+import type { Session, RepoSource, PermissionMode, ModelChoice } from "./session.js"
 
 // Generic API response wrapper
 export interface ApiResponse<T> {
@@ -19,6 +19,8 @@ export interface CreateTaskRequest {
   readonly prompt: string
   readonly repoSource: RepoSource
   readonly rules?: string
+  readonly permissionMode?: PermissionMode
+  readonly model?: ModelChoice
   readonly maxTurns?: number
   readonly maxBudgetUsd?: number
 }

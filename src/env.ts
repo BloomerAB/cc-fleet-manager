@@ -19,6 +19,7 @@ const envSchema = z.object({
   WORKSPACE_BASE_DIR: z.string().default("/tmp/cc-fleet-workspaces"),
   ALLOWED_REPOS: z.string().default(""),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
+  AUTH_MODE: z.enum(["apiKey", "subscription"]).default("apiKey"),
 })
 
 type Env = z.infer<typeof envSchema>

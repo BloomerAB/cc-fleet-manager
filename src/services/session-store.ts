@@ -1,12 +1,14 @@
 import { types as cassandraTypes } from "cassandra-driver"
 import type { Client } from "cassandra-driver"
-import type { SessionStatus, SessionResult, RepoSource, RepoConfig } from "../types/index.js"
+import type { SessionStatus, SessionResult, RepoSource, RepoConfig, PermissionMode, ModelChoice } from "../types/index.js"
 
 interface CreateSessionInput {
   readonly userId: string
   readonly prompt: string
   readonly repoSource: RepoSource
   readonly rules?: string
+  readonly permissionMode?: PermissionMode
+  readonly model?: ModelChoice
   readonly maxTurns?: number
   readonly maxBudgetUsd?: number
 }
@@ -19,6 +21,9 @@ interface Session {
   readonly repoSource: RepoSource
   readonly repos: readonly RepoConfig[]
   readonly rules: string | null
+  readonly permissionMode: PermissionMode
+  readonly model: ModelChoice
+  readonly cliSessionId: string | null
   readonly maxTurns: number
   readonly maxBudgetUsd: number
   readonly deadlineSeconds: number
@@ -62,6 +67,9 @@ const rowToSession = (row: cassandraTypes.Row): Session => ({
   repoSource: parseRepoSource(row.repo_source),
   repos: row.repos ? JSON.parse(row.repos) : [],
   rules: row.rules ?? null,
+  permissionMode: (row.permission_mode as PermissionMode) ?? "acceptEdits",
+  model: (row.model as ModelChoice) ?? "sonnet",
+  cliSessionId: row.cli_session_id ?? null,
   maxTurns: row.max_turns,
   maxBudgetUsd: row.max_budget_usd,
   deadlineSeconds: row.deadline_seconds,
@@ -88,17 +96,21 @@ const createSessionStore = (client: Client) => ({
     const maxTurns = input.maxTurns ?? DEFAULT_MAX_TURNS
     const maxBudgetUsd = input.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD
     const initialRepos = input.repoSource.mode === "direct" ? input.repoSource.repos : []
+    const permissionMode = input.permissionMode ?? "acceptEdits"
+    const model = input.model ?? "sonnet"
 
     await client.execute(
       `INSERT INTO sessions (
         user_id, id, status, prompt, repo_source, repos, rules,
+        permission_mode, model,
         max_turns, max_budget_usd, deadline_seconds, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.userId, id, "queued", input.prompt,
         JSON.stringify(input.repoSource),
         JSON.stringify(initialRepos),
         input.rules ?? null,
+        permissionMode, model,
         maxTurns, maxBudgetUsd, DEFAULT_DEADLINE_SECONDS, now, now,
       ],
       { prepare: true },
@@ -112,6 +124,9 @@ const createSessionStore = (client: Client) => ({
       repoSource: input.repoSource,
       repos: initialRepos,
       rules: input.rules ?? null,
+      permissionMode,
+      model,
+      cliSessionId: null,
       maxTurns,
       maxBudgetUsd,
       deadlineSeconds: DEFAULT_DEADLINE_SECONDS,
@@ -223,6 +238,22 @@ const createSessionStore = (client: Client) => ({
     ).catch(() => {})
 
     return true
+  },
+
+  updateCliSessionId: async (sessionId: string, cliSessionId: string): Promise<void> => {
+    const session = await client.execute(
+      "SELECT user_id, created_at FROM sessions WHERE id = ?",
+      [cassandraTypes.Uuid.fromString(sessionId)],
+      { prepare: true },
+    )
+    const row = session.first()
+    if (!row) return
+
+    await client.execute(
+      "UPDATE sessions SET cli_session_id = ?, updated_at = ? WHERE user_id = ? AND created_at = ? AND id = ?",
+      [cliSessionId, new Date(), row.user_id, row.created_at, cassandraTypes.Uuid.fromString(sessionId)],
+      { prepare: true },
+    )
   },
 
   addMessage: async (

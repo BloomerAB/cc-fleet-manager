@@ -25,11 +25,15 @@ ENV NODE_ENV=production
 
 RUN apk add --no-cache git \
     && addgroup -g 1001 -S nodejs \
-    && adduser -S appuser -u 1001
+    && adduser -S appuser -u 1001 -h /home/appuser \
+    && npm install -g @anthropic-ai/claude-code
 
 COPY --from=deps-prod /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY package.json ./
+
+# Ensure appuser home exists for claude credentials
+RUN mkdir -p /home/appuser/.claude && chown -R appuser:nodejs /home/appuser
 
 USER appuser
 

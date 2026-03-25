@@ -46,6 +46,8 @@ const createTaskSchema = z.object({
   prompt: z.string().min(1).max(MAX_PROMPT_LENGTH),
   repoSource: repoSourceSchema,
   rules: z.string().max(5000).optional(),
+  permissionMode: z.enum(["plan", "acceptEdits", "bypassPermissions"]).optional(),
+  model: z.enum(["sonnet", "opus"]).optional(),
   maxTurns: z.number().int().min(1).max(MAX_TURNS_LIMIT).optional(),
   maxBudgetUsd: z.number().min(MIN_BUDGET_USD).max(MAX_BUDGET_USD).optional(),
 })
@@ -126,6 +128,8 @@ const registerTaskRoutes = (
       prompt: body.prompt,
       repoSource: body.repoSource,
       rules: body.rules,
+      permissionMode: body.permissionMode,
+      model: body.model,
       maxTurns: body.maxTurns,
       maxBudgetUsd: body.maxBudgetUsd,
     })

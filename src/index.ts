@@ -54,6 +54,7 @@ const main = async () => {
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     app.log.info(`Received ${signal}, shutting down gracefully`)
+    taskExecutor.killAllTasks()
     await app.close()
     await db.disconnect()
     process.exit(0)

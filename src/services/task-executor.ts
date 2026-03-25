@@ -1,25 +1,27 @@
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
+import type { ChildProcess } from "node:child_process"
+import { createInterface } from "node:readline"
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { query } from "@anthropic-ai/claude-agent-sdk"
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { Env } from "../env.js"
 import type { SessionStore } from "./session-store.js"
 import type { UserStore } from "./user-store.js"
 import type { WsManager } from "./ws-manager.js"
-import type { RepoConfig, RepoSource } from "../types/index.js"
+import type { RepoConfig, RepoSource, PermissionMode } from "../types/index.js"
+import { parseCliLine } from "./cli-stream-parser.js"
 import { minimatch } from "minimatch"
 
 const execFileAsync = promisify(execFile)
 
 const GITHUB_API = "https://api.github.com"
 const PER_PAGE = 100
+const KILL_TIMEOUT_MS = 5000
 
 interface ActiveTask {
   readonly sessionId: string
   readonly userId: string
-  readonly abortController: AbortController
+  readonly process: ChildProcess
 }
 
 interface GhRepo {
@@ -47,11 +49,12 @@ const createTaskExecutor = (
     return env.GIT_TOKEN || null
   }
 
-  const getAnthropicKey = async (userId: string): Promise<string> => {
+  const getAnthropicKey = async (userId: string): Promise<string | null> => {
+    if (env.AUTH_MODE === "subscription") return null
     const userKey = await userStore.getAnthropicApiKey(userId)
     if (userKey) return userKey
     if (env.ANTHROPIC_API_KEY) return env.ANTHROPIC_API_KEY
-    throw new Error("No Anthropic API key configured. Set your key in Settings.")
+    throw new Error("No Anthropic API key configured. Set your key in Settings, or switch to subscription auth mode.")
   }
 
   const fetchOrgRepos = async (org: string, token: string): Promise<readonly GhRepo[]> => {
@@ -71,10 +74,7 @@ const createTaskExecutor = (
       )
 
       if (!response.ok) {
-        // Try as user repos if org fetch fails (personal account)
-        if (page === 1) {
-          return fetchUserRepos(token)
-        }
+        if (page === 1) return fetchUserRepos(token)
         break
       }
 
@@ -144,7 +144,6 @@ const createTaskExecutor = (
     workspaceDir: string,
     gitToken: string,
   ): Promise<void> => {
-    // Write a .gitconfig and credential helper so Claude can clone repos
     const gitConfig = [
       "[credential]",
       `  helper = store --file=${join(workspaceDir, ".git-credentials")}`,
@@ -191,7 +190,6 @@ Git credentials are pre-configured — use \`git push\` directly.
   ): string => {
     const sections: string[] = [PLATFORM_RULES]
 
-    // Repo discovery context
     if (repoSource.mode === "org" && availableRepos) {
       sections.push([
         `## Available repositories (${repoSource.org})`,
@@ -217,12 +215,10 @@ Git credentials are pre-configured — use \`git push\` directly.
       ].join("\n"))
     }
 
-    // User rules (from settings — always applied)
     if (userRules?.trim()) {
       sections.push(`# User Rules\n\n${userRules.trim()}`)
     }
 
-    // Task-specific rules (per-task overrides)
     if (taskRules?.trim()) {
       sections.push(`# Task Rules\n\n${taskRules.trim()}`)
     }
@@ -238,70 +234,38 @@ Git credentials are pre-configured — use \`git push\` directly.
     }
   }
 
-  const handleSdkMessage = (
-    message: SDKMessage,
+  const buildCliArgs = (
+    prompt: string,
+    systemPrompt: string,
     sessionId: string,
-    userId: string,
-  ): void => {
-    switch (message.type) {
-      case "assistant": {
-        for (const block of message.message.content) {
-          if (block.type === "text" && "text" in block) {
-            wsManager.emitToSession(sessionId, userId, {
-              type: "output",
-              sessionId,
-              text: block.text,
-              timestamp: new Date().toISOString(),
-            })
-            sessionStore.addMessage(sessionId, "assistant", block.text).catch(() => {})
-          } else if (block.type === "tool_use") {
-            const text = JSON.stringify(block.input)
-            wsManager.emitToSession(sessionId, userId, {
-              type: "output",
-              sessionId,
-              text,
-              toolName: block.name,
-              timestamp: new Date().toISOString(),
-            })
-            sessionStore.addMessage(sessionId, "assistant", text, block.name).catch(() => {})
-          }
-        }
-        break
-      }
-      case "result": {
-        const success = message.subtype === "success"
-        const result = {
-          success,
-          summary: success
-            ? (message.result ?? "Task completed")
-            : `Failed: ${message.subtype}`,
-          costUsd: message.total_cost_usd,
-          turnsUsed: message.num_turns,
-        }
-        const status = success ? "completed" as const : "failed" as const
-        sessionStore.updateStatus(sessionId, status, { result }).catch(() => {})
-        wsManager.emitToSession(sessionId, userId, {
-          type: "session_update",
-          sessionId,
-          status,
-        })
-        wsManager.emitToSession(sessionId, userId, {
-          type: "result",
-          sessionId,
-          result,
-        })
-        break
-      }
-      case "system": {
-        wsManager.emitToSession(sessionId, userId, {
-          type: "output",
-          sessionId,
-          text: `[System: ${message.subtype}]`,
-          timestamp: new Date().toISOString(),
-        })
-        break
-      }
+    permissionMode: PermissionMode,
+    model: string,
+    maxTurns: number,
+  ): readonly string[] => {
+    const args = [
+      "-p", prompt,
+      "--output-format", "stream-json",
+      "--verbose",
+      "--append-system-prompt", systemPrompt,
+      "--max-turns", String(maxTurns),
+      "--session-id", sessionId,
+      "--strict-mcp-config",
+      "--model", model,
+    ]
+
+    // --bare for apiKey mode (faster startup, skips OAuth)
+    if (env.AUTH_MODE === "apiKey") {
+      args.push("--bare")
     }
+
+    // Permission mode
+    if (permissionMode === "bypassPermissions") {
+      args.push("--dangerously-skip-permissions")
+    } else {
+      args.push("--permission-mode", permissionMode)
+    }
+
+    return args
   }
 
   const resolveRepos = async (
@@ -318,7 +282,6 @@ Git credentials are pre-configured — use \`git push\` directly.
           ? allRepos.filter((r) => minimatch(r.name, repoSource.pattern!))
           : allRepos
 
-        // For org mode with pattern: pre-clone matching repos (user explicitly selected these)
         const repos = filtered.map((r) => ({
           url: r.clone_url,
           branch: r.default_branch,
@@ -328,7 +291,6 @@ Git credentials are pre-configured — use \`git push\` directly.
       }
 
       case "discovery": {
-        // Discovery mode: don't clone anything upfront — Claude decides
         const allRepos = await fetchOrgRepos(repoSource.org, gitToken)
         return { repos: [], availableRepos: allRepos }
       }
@@ -344,9 +306,7 @@ Git credentials are pre-configured — use \`git push\` directly.
     }
 
     const workspaceDir = join(env.WORKSPACE_BASE_DIR, sessionId)
-    const abortController = new AbortController()
-
-    activeTasks.set(sessionId, { sessionId, userId, abortController })
+    let killed = false
 
     try {
       await sessionStore.updateStatus(sessionId, "running")
@@ -377,36 +337,135 @@ Git credentials are pre-configured — use \`git push\` directly.
         await configureGitCredentials(workspaceDir, gitToken)
       }
 
-      // SDK reads ANTHROPIC_API_KEY from env
-      process.env.ANTHROPIC_API_KEY = anthropicKey
-
-      // Fetch user rules from settings
+      // Build system prompt with all rule layers
       const userRules = await userStore.getRules(userId)
       const systemPrompt = buildSystemPrompt(session.repoSource, availableRepos, userRules, session.rules)
 
-      const result = query({
-        prompt: session.prompt,
-        options: {
-          cwd: workspaceDir,
-          maxTurns: session.maxTurns,
-          abortController,
-          permissionMode: "acceptEdits",
-          systemPrompt,
-          env: {
-            ...process.env,
-            HOME: workspaceDir,
-            GIT_CONFIG_GLOBAL: join(workspaceDir, ".gitconfig"),
-          },
-        },
+      // Build CLI arguments
+      const args = buildCliArgs(
+        session.prompt,
+        systemPrompt,
+        sessionId,
+        session.permissionMode,
+        session.model,
+        session.maxTurns,
+      )
+
+      // Build environment for the CLI process
+      const spawnEnv: Record<string, string> = {
+        ...process.env as Record<string, string>,
+        GIT_CONFIG_GLOBAL: join(workspaceDir, ".gitconfig"),
+      }
+
+      if (env.AUTH_MODE === "apiKey" && anthropicKey) {
+        spawnEnv.ANTHROPIC_API_KEY = anthropicKey
+        spawnEnv.HOME = workspaceDir
+      } else {
+        // subscription mode: HOME stays at /home/appuser (PVC mount with credentials)
+        spawnEnv.HOME = "/home/appuser"
+      }
+
+      // Spawn the Claude CLI process
+      const proc = spawn("claude", args as string[], {
+        cwd: workspaceDir,
+        env: spawnEnv,
+        stdio: ["ignore", "pipe", "pipe"],
       })
 
-      for await (const message of result) {
-        if (abortController.signal.aborted) break
-        handleSdkMessage(message, sessionId, userId)
+      activeTasks.set(sessionId, { sessionId, userId, process: proc })
+
+      // Collect stderr for error reporting
+      let stderr = ""
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString()
+      })
+
+      // Parse stdout line-by-line
+      let gotResult = false
+      const rl = createInterface({ input: proc.stdout! })
+
+      for await (const line of rl) {
+        if (killed) break
+
+        const actions = parseCliLine(line)
+        for (const action of actions) {
+          switch (action.kind) {
+            case "output": {
+              wsManager.emitToSession(sessionId, userId, {
+                type: "output",
+                sessionId,
+                text: action.text,
+                toolName: action.toolName,
+                timestamp: new Date().toISOString(),
+              })
+              sessionStore.addMessage(sessionId, "assistant", action.text, action.toolName).catch(() => {})
+              break
+            }
+            case "result": {
+              gotResult = true
+              const result = {
+                success: action.success,
+                summary: action.summary,
+                costUsd: action.costUsd,
+                turnsUsed: action.turnsUsed,
+              }
+              const status = action.success ? "completed" as const : "failed" as const
+              sessionStore.updateStatus(sessionId, status, { result }).catch(() => {})
+              sessionStore.updateCliSessionId(sessionId, action.cliSessionId).catch(() => {})
+              wsManager.emitToSession(sessionId, userId, {
+                type: "session_update",
+                sessionId,
+                status,
+              })
+              wsManager.emitToSession(sessionId, userId, {
+                type: "result",
+                sessionId,
+                result,
+              })
+              break
+            }
+            case "system": {
+              wsManager.emitToSession(sessionId, userId, {
+                type: "output",
+                sessionId,
+                text: action.text,
+                timestamp: new Date().toISOString(),
+              })
+              break
+            }
+          }
+        }
+      }
+
+      // Wait for process to exit
+      await new Promise<void>((resolve) => {
+        if (proc.exitCode !== null) {
+          resolve()
+          return
+        }
+        proc.on("close", () => resolve())
+      })
+
+      // If no result event was received and process exited non-zero, mark as failed
+      if (!gotResult && !killed) {
+        const errorMsg = stderr.trim() || `Process exited with code ${proc.exitCode}`
+        await sessionStore.updateStatus(sessionId, "failed", {
+          result: { success: false, summary: `Error: ${errorMsg}` },
+        })
+        wsManager.emitToSession(sessionId, userId, {
+          type: "session_update",
+          sessionId,
+          status: "failed",
+        })
+        wsManager.emitToSession(sessionId, userId, {
+          type: "result",
+          sessionId,
+          result: { success: false, summary: `Error: ${errorMsg}` },
+        })
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      if (!abortController.signal.aborted) {
+      if (!killed) {
         await sessionStore.updateStatus(sessionId, "failed", {
           result: { success: false, summary: `Error: ${errorMessage}` },
         })
@@ -430,13 +489,35 @@ Git credentials are pre-configured — use \`git push\` directly.
   const cancelTask = (sessionId: string): boolean => {
     const task = activeTasks.get(sessionId)
     if (!task) return false
-    task.abortController.abort()
+
+    task.process.kill("SIGTERM")
+
+    // Force kill after timeout
+    setTimeout(() => {
+      try {
+        task.process.kill("SIGKILL")
+      } catch {
+        // Already exited
+      }
+    }, KILL_TIMEOUT_MS)
+
     return true
+  }
+
+  const killAllTasks = (): void => {
+    for (const task of activeTasks.values()) {
+      try {
+        task.process.kill("SIGTERM")
+      } catch {
+        // Already exited
+      }
+    }
   }
 
   return {
     executeTask,
     cancelTask,
+    killAllTasks,
     getActiveCount: () => activeTasks.size,
   }
 }
