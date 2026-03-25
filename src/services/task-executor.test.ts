@@ -63,6 +63,8 @@ const createMockUserStore = (): UserStore => ({
   setAnthropicApiKey: vi.fn(),
   getRules: vi.fn().mockResolvedValue(null),
   setRules: vi.fn(),
+  getClaudeSettings: vi.fn().mockResolvedValue(null),
+  setClaudeSettings: vi.fn(),
 })
 
 const createMockWsManager = (): WsManager => ({

@@ -10,6 +10,7 @@ interface User {
   readonly tokenScopes: string
   readonly anthropicApiKey: string | null
   readonly rules: string | null
+  readonly claudeSettings: string | null
   readonly createdAt: Date
   readonly updatedAt: Date
 }
@@ -48,7 +49,7 @@ const createUserStore = (client: Client) => ({
 
     // Fetch to get current anthropic_api_key (preserved from previous session)
     const existing = await client.execute(
-      "SELECT anthropic_api_key, rules FROM users WHERE id = ?",
+      "SELECT anthropic_api_key, rules, claude_settings FROM users WHERE id = ?",
       [input.id],
       { prepare: true },
     )
@@ -57,6 +58,7 @@ const createUserStore = (client: Client) => ({
       ...input,
       anthropicApiKey: existing.first()?.anthropic_api_key ?? null,
       rules: existing.first()?.rules ?? null,
+      claudeSettings: existing.first()?.claude_settings ?? null,
       createdAt: now,
       updatedAt: now,
     }
@@ -81,6 +83,7 @@ const createUserStore = (client: Client) => ({
       tokenScopes: row.token_scopes,
       anthropicApiKey: row.anthropic_api_key ?? null,
       rules: row.rules ?? null,
+      claudeSettings: row.claude_settings ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }
@@ -128,6 +131,24 @@ const createUserStore = (client: Client) => ({
     await client.execute(
       "UPDATE users SET rules = ?, updated_at = ? WHERE id = ?",
       [rules, new Date(), userId],
+      { prepare: true },
+    )
+  },
+
+  getClaudeSettings: async (userId: string): Promise<string | null> => {
+    const result = await client.execute(
+      "SELECT claude_settings FROM users WHERE id = ?",
+      [userId],
+      { prepare: true },
+    )
+    const row = result.first()
+    return row?.claude_settings ?? null
+  },
+
+  setClaudeSettings: async (userId: string, settings: string | null): Promise<void> => {
+    await client.execute(
+      "UPDATE users SET claude_settings = ?, updated_at = ? WHERE id = ?",
+      [settings, new Date(), userId],
       { prepare: true },
     )
   },

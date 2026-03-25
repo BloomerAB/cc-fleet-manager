@@ -23,7 +23,14 @@ FROM node:24-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 
-RUN apk add --no-cache git bash \
+# Install tools Claude Code needs for effective operation
+RUN apk add --no-cache \
+    git bash curl jq \
+    grep sed findutils coreutils \
+    openssh-client \
+    github-cli \
+    ripgrep \
+    python3 \
     && addgroup -g 1001 -S nodejs \
     && adduser -S appuser -u 1001 -h /home/appuser \
     && npm install -g @anthropic-ai/claude-code

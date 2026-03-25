@@ -337,28 +337,63 @@ Git credentials are pre-configured — use \`git push\` directly.
         await configureGitCredentials(workspaceDir, gitToken)
       }
 
-      // Pre-configure Claude Code settings so it doesn't prompt for permissions
+      // Pre-configure Claude Code workspace
       const claudeSettingsDir = join(workspaceDir, ".claude")
       await mkdir(claudeSettingsDir, { recursive: true })
-      await writeFile(
-        join(claudeSettingsDir, "settings.json"),
-        JSON.stringify({
-          permissions: {
-            allow: [
-              "Bash(*)",
-              "Read(*)",
-              "Write(*)",
-              "Edit(*)",
-              "WebFetch(*)",
-              "Grep(*)",
-              "Glob(*)",
-            ],
-          },
-        }),
-      )
 
-      // Build system prompt with all rule layers
+      // Default settings — user can override via Settings page
+      const defaultSettings = {
+        permissions: {
+          allow: [
+            "Bash(*)",
+            "Read(*)",
+            "Write(*)",
+            "Edit(*)",
+            "WebFetch(*)",
+            "Grep(*)",
+            "Glob(*)",
+          ],
+        },
+      }
+
+      // Merge user settings over defaults
+      const userSettingsRaw = await userStore.getClaudeSettings(userId)
+      let finalSettings = defaultSettings
+      if (userSettingsRaw) {
+        try {
+          const userSettings = JSON.parse(userSettingsRaw)
+          finalSettings = { ...defaultSettings, ...userSettings }
+          // Deep merge permissions.allow if user provides it
+          if (userSettings.permissions?.allow) {
+            finalSettings = {
+              ...finalSettings,
+              permissions: {
+                ...finalSettings.permissions,
+                allow: [...new Set([...defaultSettings.permissions.allow, ...userSettings.permissions.allow])],
+              },
+            }
+          }
+        } catch {
+          // Invalid JSON, use defaults
+        }
+      }
+
+      await writeFile(join(claudeSettingsDir, "settings.json"), JSON.stringify(finalSettings))
+
+      // Write CLAUDE.md with user rules (Claude Code reads this natively)
       const userRules = await userStore.getRules(userId)
+      const claudeMdParts: string[] = []
+      if (userRules?.trim()) {
+        claudeMdParts.push(userRules.trim())
+      }
+      if (session.rules?.trim()) {
+        claudeMdParts.push(session.rules.trim())
+      }
+      if (claudeMdParts.length > 0) {
+        await writeFile(join(workspaceDir, "CLAUDE.md"), claudeMdParts.join("\n\n"))
+      }
+
+      // Build system prompt with platform rules and repo context
       const systemPrompt = buildSystemPrompt(session.repoSource, availableRepos, userRules, session.rules)
 
       // Build CLI arguments

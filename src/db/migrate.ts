@@ -30,6 +30,13 @@ const migrations: readonly Migration[] = [
       "ALTER TABLE sessions ADD cli_session_id TEXT",
     ],
   },
+  {
+    version: 4,
+    name: "004_add_claude_settings",
+    statements: [
+      "ALTER TABLE users ADD claude_settings TEXT",
+    ],
+  },
 ]
 
 const ensureVersionTable = async (client: Client): Promise<void> => {
