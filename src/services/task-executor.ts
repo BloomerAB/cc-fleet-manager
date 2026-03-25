@@ -348,13 +348,24 @@ Git credentials are pre-configured — use \`git push\` directly.
         }
       }
 
-      // Turn completed — set waiting_for_input
+      // Turn completed — set waiting_for_input with accumulated cost
       ctx.lastActivityAt = Date.now()
-      await sessionStore.updateStatus(ctx.sessionId, "waiting_for_input")
+      const turnResult = {
+        success: true,
+        summary: "Turn completed",
+        costUsd: ctx.totalCostUsd,
+        turnsUsed: ctx.totalTurnsUsed,
+      }
+      await sessionStore.updateStatus(ctx.sessionId, "waiting_for_input", { result: turnResult })
       wsManager.emitToSession(ctx.sessionId, ctx.userId, {
         type: "session_update",
         sessionId: ctx.sessionId,
         status: "waiting_for_input",
+      })
+      wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+        type: "result",
+        sessionId: ctx.sessionId,
+        result: turnResult,
       })
     } finally {
       activeTurns.delete(ctx.sessionId)

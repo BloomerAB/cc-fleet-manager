@@ -31,6 +31,7 @@ RUN apk add --no-cache \
     github-cli \
     ripgrep \
     python3 \
+    helm \
     && addgroup -g 1001 -S nodejs \
     && adduser -S appuser -u 1001 -h /home/appuser \
     && npm install -g @anthropic-ai/claude-code
