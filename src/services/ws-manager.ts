@@ -27,10 +27,23 @@ const dashboardCancelSchema = z.object({
   sessionId: z.string(),
 })
 
+const dashboardFollowUpSchema = z.object({
+  type: z.literal("follow_up"),
+  sessionId: z.string(),
+  text: z.string().min(1).max(50000),
+})
+
+const dashboardEndSessionSchema = z.object({
+  type: z.literal("end_session"),
+  sessionId: z.string(),
+})
+
 const dashboardMessageSchema = z.discriminatedUnion("type", [
   dashboardSubscribeSchema,
   dashboardAnswerSchema,
   dashboardCancelSchema,
+  dashboardFollowUpSchema,
+  dashboardEndSessionSchema,
 ])
 
 const createWsManager = () => {

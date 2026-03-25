@@ -99,6 +99,8 @@ export type DashboardToManagerMessage =
   | DashboardAnswerMessage
   | DashboardCancelMessage
   | DashboardSubscribeMessage
+  | DashboardFollowUpMessage
+  | DashboardEndSessionMessage
 
 export interface DashboardAnswerMessage {
   readonly type: "answer"
@@ -114,4 +116,15 @@ export interface DashboardCancelMessage {
 export interface DashboardSubscribeMessage {
   readonly type: "subscribe"
   readonly sessionIds: readonly string[]
+}
+
+export interface DashboardFollowUpMessage {
+  readonly type: "follow_up"
+  readonly sessionId: string
+  readonly text: string
+}
+
+export interface DashboardEndSessionMessage {
+  readonly type: "end_session"
+  readonly sessionId: string
 }

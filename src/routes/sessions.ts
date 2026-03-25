@@ -72,6 +72,26 @@ const registerSessionRoutes = (
             }
             break
           }
+          case "follow_up": {
+            const session = await sessionStore.findById(message.sessionId, user.sub)
+            if (!session) break
+            if (session.status !== "waiting_for_input") {
+              app.log.warn({ sessionId: message.sessionId, status: session.status }, "Follow-up sent to non-waiting session")
+              break
+            }
+            taskExecutor.sendFollowUp(message.sessionId, user.sub, message.text).catch((error) => {
+              app.log.error({ error, sessionId: message.sessionId }, "Follow-up failed")
+            })
+            break
+          }
+          case "end_session": {
+            const session = await sessionStore.findById(message.sessionId, user.sub)
+            if (!session) break
+            taskExecutor.endSession(message.sessionId, user.sub).catch((error) => {
+              app.log.error({ error, sessionId: message.sessionId }, "End session failed")
+            })
+            break
+          }
         }
       } catch (error) {
         app.log.error({ error }, "Error processing dashboard message")

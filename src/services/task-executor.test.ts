@@ -4,12 +4,16 @@ import type { Env } from "../env.js"
 import type { SessionStore } from "./session-store.js"
 import type { UserStore } from "./user-store.js"
 import type { WsManager } from "./ws-manager.js"
-import { EventEmitter, Readable } from "node:stream"
 
-// Mock child_process spawn
-const mockSpawn = vi.fn()
+// Mock the SDK query function
+const mockQuery = vi.fn()
+const mockClose = vi.fn()
+vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
+  query: (...args: unknown[]) => mockQuery(...args),
+}))
+
+// Mock child_process (for git clone)
 vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => mockSpawn(...args),
   execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null) => void) => {
     cb(null)
   }),
@@ -72,35 +76,44 @@ const createMockWsManager = (): WsManager => ({
   emitToSession: vi.fn(),
 })
 
-// Helper to create a mock child process
-const createMockProcess = () => {
-  const stdout = new Readable({ read() {} })
-  const stderr = new Readable({ read() {} })
-  const proc = new EventEmitter() as EventEmitter & {
-    stdout: Readable
-    stderr: Readable
-    kill: ReturnType<typeof vi.fn>
-    exitCode: number | null
-    pid: number
+/** Helper: create a mock query that yields SDK messages then returns */
+const createMockQueryIterator = (messages: unknown[]) => {
+  const iterator = {
+    [Symbol.asyncIterator]: () => {
+      let index = 0
+      return {
+        next: async () => {
+          if (index < messages.length) {
+            return { value: messages[index++], done: false }
+          }
+          return { value: undefined, done: true }
+        },
+      }
+    },
+    close: mockClose,
+    interrupt: vi.fn(),
+    setPermissionMode: vi.fn(),
+    setModel: vi.fn(),
+    setMaxThinkingTokens: vi.fn(),
+    applyFlagSettings: vi.fn(),
+    initializationResult: vi.fn(),
+    supportedCommands: vi.fn(),
+    supportedModels: vi.fn(),
+    supportedAgents: vi.fn(),
+    mcpServerStatus: vi.fn(),
+    accountInfo: vi.fn(),
+    rewindFiles: vi.fn(),
+    seedReadState: vi.fn(),
+    reconnectMcpServer: vi.fn(),
+    toggleMcpServer: vi.fn(),
+    setMcpServers: vi.fn(),
+    streamInput: vi.fn(),
+    stopTask: vi.fn(),
+    next: vi.fn(),
+    return: vi.fn(),
+    throw: vi.fn(),
   }
-  proc.stdout = stdout
-  proc.stderr = stderr
-  proc.kill = vi.fn()
-  proc.exitCode = null
-  proc.pid = 12345
-  return proc
-}
-
-// Helper to emit lines on stdout and close process
-const emitLinesAndClose = (proc: ReturnType<typeof createMockProcess>, lines: string[], exitCode = 0) => {
-  setTimeout(() => {
-    for (const line of lines) {
-      proc.stdout.push(line + "\n")
-    }
-    proc.stdout.push(null) // EOF
-    proc.exitCode = exitCode
-    proc.emit("close", exitCode)
-  }, 5)
+  return iterator
 }
 
 describe("createTaskExecutor", () => {
@@ -158,20 +171,21 @@ describe("createTaskExecutor", () => {
         .rejects.toThrow("Maximum concurrent tasks reached")
     })
 
-    it("should spawn claude CLI and process output", async () => {
+    it("should create SDK query and process assistant messages", async () => {
       vi.mocked(sessionStore.findById).mockResolvedValueOnce(baseSession)
 
-      const proc = createMockProcess()
-      mockSpawn.mockReturnValueOnce(proc)
-
-      emitLinesAndClose(proc, [
-        JSON.stringify({ type: "system", subtype: "init", session_id: "cli-sess-1" }),
-        JSON.stringify({
+      const mockIter = createMockQueryIterator([
+        {
+          type: "system",
+          subtype: "init",
+          session_id: "cli-sess-1",
+        },
+        {
           type: "assistant",
           message: { content: [{ type: "text", text: "I found the bug" }] },
           session_id: "cli-sess-1",
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           subtype: "success",
           is_error: false,
@@ -180,24 +194,19 @@ describe("createTaskExecutor", () => {
           total_cost_usd: 0.5,
           num_turns: 3,
           duration_ms: 1000,
-        }),
+        },
       ])
+      mockQuery.mockReturnValueOnce(mockIter)
 
       await executor.executeTask("session-1", "user-1")
 
-      // Should have spawned claude
-      expect(mockSpawn).toHaveBeenCalledOnce()
-      const spawnArgs = mockSpawn.mock.calls[0]
-      expect(spawnArgs[0]).toBe("claude")
-
-      // Check CLI args include key flags
-      const cliArgs = spawnArgs[1] as string[]
-      expect(cliArgs).toContain("-p")
-      expect(cliArgs).toContain("--output-format")
-      expect(cliArgs).toContain("stream-json")
-      expect(cliArgs).toContain("--bare")
-      expect(cliArgs).toContain("--permission-mode")
-      expect(cliArgs).toContain("acceptEdits")
+      // Should have called SDK query
+      expect(mockQuery).toHaveBeenCalledOnce()
+      const params = mockQuery.mock.calls[0][0]
+      expect(params.prompt).toBe("Fix bug")
+      expect(params.options.permissionMode).toBe("acceptEdits")
+      expect(params.options.model).toBe("claude-sonnet-4-6")
+      expect(params.options.cwd).toContain("session-1")
 
       // Should have emitted output
       expect(wsManager.emitToSession).toHaveBeenCalledWith("session-1", "user-1", expect.objectContaining({
@@ -205,86 +214,71 @@ describe("createTaskExecutor", () => {
         text: "I found the bug",
       }))
 
-      // Should have updated status to completed
-      expect(sessionStore.updateStatus).toHaveBeenCalledWith("session-1", "completed", expect.objectContaining({
-        result: expect.objectContaining({ success: true }),
-      }))
+      // Should be waiting_for_input (interactive mode)
+      expect(sessionStore.updateStatus).toHaveBeenCalledWith("session-1", "waiting_for_input")
     })
 
-    it("should pass bypassPermissions as --dangerously-skip-permissions", async () => {
+    it("should use opus model when specified", async () => {
+      vi.mocked(sessionStore.findById).mockResolvedValueOnce({
+        ...baseSession,
+        model: "opus",
+      })
+
+      const mockIter = createMockQueryIterator([
+        { type: "result", subtype: "success", session_id: "s1", total_cost_usd: 0, num_turns: 1 },
+      ])
+      mockQuery.mockReturnValueOnce(mockIter)
+
+      await executor.executeTask("session-1", "user-1")
+
+      const params = mockQuery.mock.calls[0][0]
+      expect(params.options.model).toBe("claude-opus-4-6")
+    })
+
+    it("should pass bypassPermissions to SDK", async () => {
       vi.mocked(sessionStore.findById).mockResolvedValueOnce({
         ...baseSession,
         permissionMode: "bypassPermissions",
       })
 
-      const proc = createMockProcess()
-      mockSpawn.mockReturnValueOnce(proc)
-      emitLinesAndClose(proc, [
-        JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Done", session_id: "s1", total_cost_usd: 0, num_turns: 1, duration_ms: 10 }),
+      const mockIter = createMockQueryIterator([
+        { type: "result", subtype: "success", session_id: "s1", total_cost_usd: 0, num_turns: 1 },
       ])
+      mockQuery.mockReturnValueOnce(mockIter)
 
       await executor.executeTask("session-1", "user-1")
 
-      const cliArgs = mockSpawn.mock.calls[0][1] as string[]
-      expect(cliArgs).toContain("--dangerously-skip-permissions")
-      expect(cliArgs).not.toContain("--permission-mode")
+      const params = mockQuery.mock.calls[0][0]
+      expect(params.options.permissionMode).toBe("bypassPermissions")
     })
 
     it("should set ANTHROPIC_API_KEY in apiKey mode", async () => {
       vi.mocked(sessionStore.findById).mockResolvedValueOnce(baseSession)
 
-      const proc = createMockProcess()
-      mockSpawn.mockReturnValueOnce(proc)
-      emitLinesAndClose(proc, [
-        JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Done", session_id: "s1", total_cost_usd: 0, num_turns: 1, duration_ms: 10 }),
+      const mockIter = createMockQueryIterator([
+        { type: "result", subtype: "success", session_id: "s1", total_cost_usd: 0, num_turns: 1 },
       ])
+      mockQuery.mockReturnValueOnce(mockIter)
 
       await executor.executeTask("session-1", "user-1")
 
-      const spawnOpts = mockSpawn.mock.calls[0][2] as { env: Record<string, string> }
-      expect(spawnOpts.env.ANTHROPIC_API_KEY).toBe("sk-ant-user-key")
+      const params = mockQuery.mock.calls[0][0]
+      expect(params.options.env.ANTHROPIC_API_KEY).toBe("sk-ant-user-key")
     })
 
-    it("should not set ANTHROPIC_API_KEY in subscription mode", async () => {
-      const subEnv = createMockEnv({ AUTH_MODE: "subscription" as const })
-      const subExecutor = createTaskExecutor(subEnv, sessionStore, userStore, wsManager)
-
+    it("should handle SDK errors gracefully", async () => {
       vi.mocked(sessionStore.findById).mockResolvedValueOnce(baseSession)
 
-      const proc = createMockProcess()
-      mockSpawn.mockReturnValueOnce(proc)
-      emitLinesAndClose(proc, [
-        JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Done", session_id: "s1", total_cost_usd: 0, num_turns: 1, duration_ms: 10 }),
-      ])
-
-      await subExecutor.executeTask("session-1", "user-1")
-
-      const spawnOpts = mockSpawn.mock.calls[0][2] as { env: Record<string, string> }
-      expect(spawnOpts.env.ANTHROPIC_API_KEY).toBeUndefined()
-      expect(spawnOpts.env.HOME).toBe("/home/appuser")
-    })
-
-    it("should handle process exit without result event", async () => {
-      vi.mocked(sessionStore.findById).mockResolvedValueOnce(baseSession)
-
-      const proc = createMockProcess()
-      mockSpawn.mockReturnValueOnce(proc)
-
-      // Exit with no result event
-      setTimeout(() => {
-        proc.stderr.push("Something went wrong\n")
-        proc.stdout.push(null)
-        proc.stderr.push(null)
-        proc.exitCode = 1
-        proc.emit("close", 1)
-      }, 5)
+      mockQuery.mockImplementationOnce(() => {
+        throw new Error("SDK initialization failed")
+      })
 
       await executor.executeTask("session-1", "user-1")
 
       expect(sessionStore.updateStatus).toHaveBeenCalledWith("session-1", "failed", expect.objectContaining({
         result: expect.objectContaining({
           success: false,
-          summary: expect.stringContaining("Something went wrong"),
+          summary: expect.stringContaining("SDK initialization failed"),
         }),
       }))
     })
@@ -299,6 +293,16 @@ describe("createTaskExecutor", () => {
   describe("getActiveCount", () => {
     it("should return 0 when no tasks are running", () => {
       expect(executor.getActiveCount()).toBe(0)
+    })
+  })
+
+  describe("endSession", () => {
+    it("should handle ending a non-existent session gracefully", async () => {
+      await executor.endSession("nonexistent", "user-1")
+
+      expect(sessionStore.updateStatus).toHaveBeenCalledWith("nonexistent", "completed", expect.objectContaining({
+        result: expect.objectContaining({ success: true }),
+      }))
     })
   })
 })

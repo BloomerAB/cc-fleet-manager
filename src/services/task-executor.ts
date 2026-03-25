@@ -1,28 +1,32 @@
-import { execFile, spawn } from "node:child_process"
-import type { ChildProcess } from "node:child_process"
-import { createInterface } from "node:readline"
+import { execFile } from "node:child_process"
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { promisify } from "node:util"
+import { query } from "@anthropic-ai/claude-agent-sdk"
+import type { Query, SDKMessage, SDKAssistantMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { Env } from "../env.js"
 import type { SessionStore } from "./session-store.js"
 import type { UserStore } from "./user-store.js"
 import type { WsManager } from "./ws-manager.js"
 import type { RepoConfig, RepoSource, PermissionMode } from "../types/index.js"
-import { parseCliLine } from "./cli-stream-parser.js"
 import { minimatch } from "minimatch"
 
 const execFileAsync = promisify(execFile)
 
 const GITHUB_API = "https://api.github.com"
 const PER_PAGE = 100
-const KILL_TIMEOUT_MS = 5000
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
+const IDLE_CHECK_INTERVAL_MS = 60 * 1000 // 1 minute
 
-interface ActiveTask {
+interface SessionContext {
   readonly sessionId: string
   readonly userId: string
-  readonly process: ChildProcess
-  killed: boolean
+  readonly workspaceDir: string
+  query: Query | null
+  cliSessionId: string | null
+  totalCostUsd: number
+  totalTurnsUsed: number
+  lastActivityAt: number
 }
 
 interface GhRepo {
@@ -42,7 +46,8 @@ const createTaskExecutor = (
   userStore: UserStore,
   wsManager: WsManager,
 ) => {
-  const activeTasks = new Map<string, ActiveTask>()
+  const sessionContexts = new Map<string, SessionContext>()
+  const activeTurns = new Set<string>()
 
   const getGitToken = async (userId: string): Promise<string | null> => {
     const token = await userStore.getAccessToken(userId)
@@ -235,40 +240,6 @@ Git credentials are pre-configured — use \`git push\` directly.
     }
   }
 
-  const buildCliArgs = (
-    prompt: string,
-    systemPrompt: string,
-    sessionId: string,
-    permissionMode: PermissionMode,
-    model: string,
-    maxTurns: number,
-  ): readonly string[] => {
-    const args = [
-      "-p", prompt,
-      "--output-format", "stream-json",
-      "--verbose",
-      "--append-system-prompt", systemPrompt,
-      "--max-turns", String(maxTurns),
-      "--session-id", sessionId,
-      "--strict-mcp-config",
-      "--model", model,
-    ]
-
-    // --bare for apiKey mode (faster startup, skips OAuth)
-    if (env.AUTH_MODE === "apiKey") {
-      args.push("--bare")
-    }
-
-    // Permission mode
-    if (permissionMode === "bypassPermissions") {
-      args.push("--dangerously-skip-permissions")
-    } else {
-      args.push("--permission-mode", permissionMode)
-    }
-
-    return args
-  }
-
   const resolveRepos = async (
     repoSource: RepoSource,
     gitToken: string,
@@ -298,11 +269,101 @@ Git credentials are pre-configured — use \`git push\` directly.
     }
   }
 
+  /** Extract text content from SDK assistant messages */
+  const extractTextFromMessage = (msg: SDKAssistantMessage): { text: string; toolBlocks: { name: string; input: string }[] } => {
+    let text = ""
+    const toolBlocks: { name: string; input: string }[] = []
+
+    if (msg.message && "content" in msg.message) {
+      const content = msg.message.content as unknown[]
+      for (const block of content) {
+        const b = block as Record<string, unknown>
+        if (b.type === "text" && typeof b.text === "string") {
+          text += b.text
+        } else if (b.type === "tool_use" && typeof b.name === "string") {
+          toolBlocks.push({ name: b.name, input: JSON.stringify(b.input ?? {}) })
+        }
+      }
+    }
+
+    return { text, toolBlocks }
+  }
+
+  /** Stream a single turn of the conversation */
+  const streamTurn = async (ctx: SessionContext): Promise<void> => {
+    activeTurns.add(ctx.sessionId)
+
+    try {
+      for await (const msg of ctx.query!) {
+        const sdkMsg = msg as SDKMessage
+
+        if (sdkMsg.type === "assistant") {
+          const assistant = sdkMsg as SDKAssistantMessage
+          const { text, toolBlocks } = extractTextFromMessage(assistant)
+
+          if (text) {
+            wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+              type: "output",
+              sessionId: ctx.sessionId,
+              text,
+              timestamp: new Date().toISOString(),
+            })
+            sessionStore.addMessage(ctx.sessionId, "assistant", text).catch(() => {})
+          }
+
+          for (const tool of toolBlocks) {
+            wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+              type: "output",
+              sessionId: ctx.sessionId,
+              text: tool.input,
+              toolName: tool.name,
+              timestamp: new Date().toISOString(),
+            })
+            sessionStore.addMessage(ctx.sessionId, "tool", tool.input, tool.name).catch(() => {})
+          }
+
+          // Capture CLI session ID
+          if (!ctx.cliSessionId && sdkMsg.session_id) {
+            ctx.cliSessionId = sdkMsg.session_id
+            sessionStore.updateCliSessionId(ctx.sessionId, sdkMsg.session_id).catch(() => {})
+          }
+        } else if (sdkMsg.type === "result") {
+          const result = sdkMsg as SDKResultMessage
+          ctx.totalCostUsd += ("total_cost_usd" in result ? result.total_cost_usd : 0) ?? 0
+          ctx.totalTurnsUsed += ("num_turns" in result ? result.num_turns : 0) ?? 0
+
+          if (!ctx.cliSessionId && result.session_id) {
+            ctx.cliSessionId = result.session_id
+            sessionStore.updateCliSessionId(ctx.sessionId, result.session_id).catch(() => {})
+          }
+        } else if (sdkMsg.type === "system" && "subtype" in sdkMsg && sdkMsg.subtype === "init") {
+          wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+            type: "output",
+            sessionId: ctx.sessionId,
+            text: "[System: init]",
+            timestamp: new Date().toISOString(),
+          })
+        }
+      }
+
+      // Turn completed — set waiting_for_input
+      ctx.lastActivityAt = Date.now()
+      await sessionStore.updateStatus(ctx.sessionId, "waiting_for_input")
+      wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+        type: "session_update",
+        sessionId: ctx.sessionId,
+        status: "waiting_for_input",
+      })
+    } finally {
+      activeTurns.delete(ctx.sessionId)
+    }
+  }
+
   const executeTask = async (sessionId: string, userId: string): Promise<void> => {
     const session = await sessionStore.findById(sessionId, userId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
 
-    if (activeTasks.size >= env.MAX_CONCURRENT_TASKS) {
+    if (sessionContexts.size >= env.MAX_CONCURRENT_TASKS) {
       throw new Error("Maximum concurrent tasks reached")
     }
 
@@ -341,7 +402,7 @@ Git credentials are pre-configured — use \`git push\` directly.
       const claudeSettingsDir = join(workspaceDir, ".claude")
       await mkdir(claudeSettingsDir, { recursive: true })
 
-      // Default settings — user can override via Settings page
+      // Default settings
       const defaultSettings = {
         permissions: {
           allow: [
@@ -363,7 +424,6 @@ Git credentials are pre-configured — use \`git push\` directly.
         try {
           const userSettings = JSON.parse(userSettingsRaw)
           finalSettings = { ...defaultSettings, ...userSettings }
-          // Deep merge permissions.allow if user provides it
           if (userSettings.permissions?.allow) {
             finalSettings = {
               ...finalSettings,
@@ -380,7 +440,7 @@ Git credentials are pre-configured — use \`git push\` directly.
 
       await writeFile(join(claudeSettingsDir, "settings.json"), JSON.stringify(finalSettings))
 
-      // Write CLAUDE.md with user rules (Claude Code reads this natively)
+      // Write CLAUDE.md with user rules
       const userRules = await userStore.getRules(userId)
       const claudeMdParts: string[] = []
       if (userRules?.trim()) {
@@ -393,192 +453,226 @@ Git credentials are pre-configured — use \`git push\` directly.
         await writeFile(join(workspaceDir, "CLAUDE.md"), claudeMdParts.join("\n\n"))
       }
 
-      // Build system prompt with platform rules and repo context
+      // Build system prompt
       const systemPrompt = buildSystemPrompt(session.repoSource, availableRepos, userRules, session.rules)
 
-      // Build CLI arguments
-      const args = buildCliArgs(
-        session.prompt,
-        systemPrompt,
-        sessionId,
-        session.permissionMode,
-        session.model,
-        session.maxTurns,
-      )
-
-      // Build environment for the CLI process
-      const spawnEnv: Record<string, string> = {
-        ...process.env as Record<string, string>,
+      // Build environment
+      const spawnEnv: Record<string, string | undefined> = {
+        ...process.env,
         SHELL: "/bin/sh",
         GIT_CONFIG_GLOBAL: join(workspaceDir, ".gitconfig"),
+        CLAUDE_AGENT_SDK_CLIENT_APP: "cc-fleet/0.3.0",
       }
 
       if (env.AUTH_MODE === "apiKey" && anthropicKey) {
         spawnEnv.ANTHROPIC_API_KEY = anthropicKey
         spawnEnv.HOME = workspaceDir
       } else {
-        // subscription mode: HOME stays at /home/appuser (PVC mount with credentials)
-        // Explicitly remove any stale API key so CLI uses OAuth
         delete spawnEnv.ANTHROPIC_API_KEY
         spawnEnv.HOME = "/home/appuser"
       }
 
-      // Spawn the Claude CLI process
-      const proc = spawn("claude", args as string[], {
-        cwd: workspaceDir,
-        env: spawnEnv,
-        stdio: ["ignore", "pipe", "pipe"],
+      // Map permission mode — SDK uses "bypassPermissions" differently
+      const sdkPermissionMode = session.permissionMode === "bypassPermissions"
+        ? "bypassPermissions" as const
+        : session.permissionMode as "plan" | "acceptEdits"
+
+      // Create the query with streaming input support
+      const q = query({
+        prompt: session.prompt,
+        options: {
+          cwd: workspaceDir,
+          systemPrompt: { type: "preset", preset: "claude_code", append: systemPrompt },
+          maxTurns: session.maxTurns,
+          model: session.model === "opus" ? "claude-opus-4-6" : "claude-sonnet-4-6",
+          permissionMode: sdkPermissionMode,
+          allowedTools: [
+            "Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch",
+          ],
+          env: spawnEnv,
+          abortController: new AbortController(),
+        },
       })
 
-      const activeTask: ActiveTask = { sessionId, userId, process: proc, killed: false }
-      activeTasks.set(sessionId, activeTask)
-
-      // Collect stderr for error reporting
-      let stderr = ""
-      proc.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-
-      // Parse stdout line-by-line
-      let gotResult = false
-      const rl = createInterface({ input: proc.stdout! })
-
-      for await (const line of rl) {
-        if (activeTasks.get(sessionId)?.killed) break
-
-        const actions = parseCliLine(line)
-        for (const action of actions) {
-          switch (action.kind) {
-            case "output": {
-              wsManager.emitToSession(sessionId, userId, {
-                type: "output",
-                sessionId,
-                text: action.text,
-                toolName: action.toolName,
-                timestamp: new Date().toISOString(),
-              })
-              sessionStore.addMessage(sessionId, "assistant", action.text, action.toolName).catch(() => {})
-              break
-            }
-            case "result": {
-              gotResult = true
-              const result = {
-                success: action.success,
-                summary: action.summary,
-                costUsd: action.costUsd,
-                turnsUsed: action.turnsUsed,
-              }
-              const status = action.success ? "completed" as const : "failed" as const
-              sessionStore.updateStatus(sessionId, status, { result }).catch(() => {})
-              sessionStore.updateCliSessionId(sessionId, action.cliSessionId).catch(() => {})
-              wsManager.emitToSession(sessionId, userId, {
-                type: "session_update",
-                sessionId,
-                status,
-              })
-              wsManager.emitToSession(sessionId, userId, {
-                type: "result",
-                sessionId,
-                result,
-              })
-              break
-            }
-            case "system": {
-              wsManager.emitToSession(sessionId, userId, {
-                type: "output",
-                sessionId,
-                text: action.text,
-                timestamp: new Date().toISOString(),
-              })
-              break
-            }
-          }
-        }
+      // Create session context
+      const ctx: SessionContext = {
+        sessionId,
+        userId,
+        workspaceDir,
+        query: q,
+        cliSessionId: null,
+        totalCostUsd: 0,
+        totalTurnsUsed: 0,
+        lastActivityAt: Date.now(),
       }
+      sessionContexts.set(sessionId, ctx)
 
-      // Wait for process to exit
-      await new Promise<void>((resolve) => {
-        if (proc.exitCode !== null) {
-          resolve()
-          return
-        }
-        proc.on("close", () => resolve())
-      })
-
-      // If no result event was received and process exited non-zero, mark as failed
-      if (!gotResult && !activeTasks.get(sessionId)?.killed) {
-        const errorMsg = stderr.trim() || `Process exited with code ${proc.exitCode}`
-        await sessionStore.updateStatus(sessionId, "failed", {
-          result: { success: false, summary: `Error: ${errorMsg}` },
-        })
-        wsManager.emitToSession(sessionId, userId, {
-          type: "session_update",
-          sessionId,
-          status: "failed",
-        })
-        wsManager.emitToSession(sessionId, userId, {
-          type: "result",
-          sessionId,
-          result: { success: false, summary: `Error: ${errorMsg}` },
-        })
-      }
+      // Stream the first turn
+      await streamTurn(ctx)
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      if (!activeTasks.get(sessionId)?.killed) {
-        await sessionStore.updateStatus(sessionId, "failed", {
-          result: { success: false, summary: `Error: ${errorMessage}` },
-        })
-        wsManager.emitToSession(sessionId, userId, {
-          type: "session_update",
-          sessionId,
-          status: "failed",
-        })
-        wsManager.emitToSession(sessionId, userId, {
-          type: "result",
-          sessionId,
-          result: { success: false, summary: `Error: ${errorMessage}` },
-        })
+      await sessionStore.updateStatus(sessionId, "failed", {
+        result: { success: false, summary: `Error: ${errorMessage}` },
+      })
+      wsManager.emitToSession(sessionId, userId, {
+        type: "session_update",
+        sessionId,
+        status: "failed",
+      })
+      wsManager.emitToSession(sessionId, userId, {
+        type: "result",
+        sessionId,
+        result: { success: false, summary: `Error: ${errorMessage}` },
+      })
+
+      // Cleanup on failure
+      const ctx = sessionContexts.get(sessionId)
+      if (ctx?.query) {
+        try { ctx.query.close() } catch { /* already closed */ }
       }
-    } finally {
-      activeTasks.delete(sessionId)
+      sessionContexts.delete(sessionId)
       await cleanupWorkspace(workspaceDir)
     }
   }
 
+  const sendFollowUp = async (sessionId: string, userId: string, text: string): Promise<void> => {
+    const ctx = sessionContexts.get(sessionId)
+    if (!ctx) throw new Error(`No active session context for ${sessionId}`)
+    if (!ctx.query) throw new Error(`Session ${sessionId} has no active query`)
+    if (activeTurns.has(sessionId)) throw new Error(`Session ${sessionId} already has a running turn`)
+
+    ctx.lastActivityAt = Date.now()
+
+    // Update status
+    await sessionStore.updateStatus(sessionId, "running")
+    wsManager.emitToSession(sessionId, userId, {
+      type: "session_update",
+      sessionId,
+      status: "running",
+    })
+
+    // Echo user message
+    wsManager.emitToSession(sessionId, userId, {
+      type: "output",
+      sessionId,
+      text: `**You:** ${text}`,
+      timestamp: new Date().toISOString(),
+    })
+    await sessionStore.addMessage(sessionId, "user", text)
+
+    // Stream the follow-up message to the running query
+    const userMsg = {
+      type: "user" as const,
+      message: { role: "user" as const, content: text },
+      parent_tool_use_id: null,
+      session_id: ctx.cliSessionId ?? sessionId,
+    }
+
+    try {
+      // Use streamInput to send the follow-up
+      await ctx.query.streamInput((async function* () {
+        yield userMsg
+      })())
+
+      // Stream the response
+      await streamTurn(ctx)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      await sessionStore.updateStatus(sessionId, "failed", {
+        result: { success: false, summary: `Error: ${errorMessage}` },
+      })
+      wsManager.emitToSession(sessionId, userId, {
+        type: "session_update",
+        sessionId,
+        status: "failed",
+      })
+
+      // Cleanup on failure
+      try { ctx.query.close() } catch { /* */ }
+      sessionContexts.delete(sessionId)
+      await cleanupWorkspace(ctx.workspaceDir)
+    }
+  }
+
+  const endSession = async (sessionId: string, userId: string): Promise<void> => {
+    const ctx = sessionContexts.get(sessionId)
+
+    // Close the query if still running
+    if (ctx?.query) {
+      try { ctx.query.close() } catch { /* already closed */ }
+    }
+
+    const result = ctx
+      ? {
+          success: true,
+          summary: "Session ended by user",
+          costUsd: ctx.totalCostUsd,
+          turnsUsed: ctx.totalTurnsUsed,
+        }
+      : { success: true, summary: "Session ended by user" }
+
+    await sessionStore.updateStatus(sessionId, "completed", { result })
+    wsManager.emitToSession(sessionId, userId, {
+      type: "session_update",
+      sessionId,
+      status: "completed",
+    })
+    wsManager.emitToSession(sessionId, userId, {
+      type: "result",
+      sessionId,
+      result,
+    })
+
+    if (ctx) {
+      sessionContexts.delete(sessionId)
+      await cleanupWorkspace(ctx.workspaceDir)
+    }
+  }
+
   const cancelTask = (sessionId: string): boolean => {
-    const task = activeTasks.get(sessionId)
-    if (!task) return false
+    const ctx = sessionContexts.get(sessionId)
+    if (!ctx) return false
 
-    task.killed = true
-    task.process.kill("SIGTERM")
+    if (ctx.query) {
+      try { ctx.query.close() } catch { /* already closed */ }
+    }
 
-    // Force kill after timeout
-    setTimeout(() => {
-      try {
-        task.process.kill("SIGKILL")
-      } catch {
-        // Already exited
-      }
-    }, KILL_TIMEOUT_MS)
+    sessionContexts.delete(sessionId)
+    cleanupWorkspace(ctx.workspaceDir).catch(() => {})
 
     return true
   }
 
   const killAllTasks = (): void => {
-    for (const task of activeTasks.values()) {
-      try {
-        task.process.kill("SIGTERM")
-      } catch {
-        // Already exited
+    for (const ctx of sessionContexts.values()) {
+      if (ctx.query) {
+        try { ctx.query.close() } catch { /* */ }
       }
     }
   }
 
+  // Idle timeout checker
+  const idleCheckTimer = setInterval(() => {
+    const now = Date.now()
+    for (const [sessionId, ctx] of sessionContexts) {
+      if (!activeTurns.has(sessionId) && now - ctx.lastActivityAt > IDLE_TIMEOUT_MS) {
+        endSession(sessionId, ctx.userId).catch(() => {})
+      }
+    }
+  }, IDLE_CHECK_INTERVAL_MS)
+
+  // Prevent timer from keeping process alive
+  if (idleCheckTimer.unref) {
+    idleCheckTimer.unref()
+  }
+
   return {
     executeTask,
+    sendFollowUp,
+    endSession,
     cancelTask,
     killAllTasks,
-    getActiveCount: () => activeTasks.size,
+    getActiveCount: () => sessionContexts.size,
   }
 }
 
