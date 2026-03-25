@@ -208,10 +208,11 @@ describe("createTaskExecutor", () => {
         }))
       })
 
-      // Should have called SDK query
+      // Should have called SDK query with async iterable prompt
       expect(mockQuery).toHaveBeenCalledOnce()
       const params = mockQuery.mock.calls[0][0]
-      expect(params.prompt).toBe("Fix bug")
+      expect(params.prompt).toBeDefined()
+      expect(params.prompt[Symbol.asyncIterator]).toBeDefined() // async iterable
       expect(params.options.permissionMode).toBe("acceptEdits")
       expect(params.options.model).toBe("claude-sonnet-4-6")
       expect(params.options.cwd).toContain("session-1")

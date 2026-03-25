@@ -18,11 +18,62 @@ const PER_PAGE = 100
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000 // 1 minute
 
+interface InputQueue {
+  push(msg: { type: "user"; message: { role: "user"; content: string }; parent_tool_use_id: null; session_id: string }): void
+  close(): void
+}
+
+const createInputQueue = (): { stream: AsyncIterable<{ type: "user"; message: { role: "user"; content: string }; parent_tool_use_id: null; session_id: string }>; queue: InputQueue } => {
+  type UserMsg = { type: "user"; message: { role: "user"; content: string }; parent_tool_use_id: null; session_id: string }
+  const pending: UserMsg[] = []
+  let resolver: ((value: IteratorResult<UserMsg>) => void) | null = null
+  let closed = false
+
+  const stream: AsyncIterable<UserMsg> = {
+    [Symbol.asyncIterator]() {
+      return {
+        next(): Promise<IteratorResult<UserMsg>> {
+          if (pending.length > 0) {
+            return Promise.resolve({ value: pending.shift()!, done: false })
+          }
+          if (closed) {
+            return Promise.resolve({ value: undefined as unknown as UserMsg, done: true })
+          }
+          return new Promise((resolve) => { resolver = resolve })
+        },
+      }
+    },
+  }
+
+  const queue: InputQueue = {
+    push(msg: UserMsg) {
+      if (resolver) {
+        const r = resolver
+        resolver = null
+        r({ value: msg, done: false })
+      } else {
+        pending.push(msg)
+      }
+    },
+    close() {
+      closed = true
+      if (resolver) {
+        const r = resolver
+        resolver = null
+        r({ value: undefined as unknown as UserMsg, done: true })
+      }
+    },
+  }
+
+  return { stream, queue }
+}
+
 interface SessionContext {
   readonly sessionId: string
   readonly userId: string
   readonly workspaceDir: string
   query: Query | null
+  inputQueue: InputQueue | null
   cliSessionId: string | null
   totalCostUsd: number
   totalTurnsUsed: number
@@ -528,10 +579,20 @@ Git credentials are pre-configured — use \`git push\` directly.
         ? "bypassPermissions" as const
         : session.permissionMode as "plan" | "acceptEdits"
 
-      // Create the query with streaming input support
+      // Create input queue — keeps the SDK process alive until we close it
+      const { stream: inputStream, queue: inputQueue } = createInputQueue()
+
+      // Push the initial prompt as the first message
+      inputQueue.push({
+        type: "user",
+        message: { role: "user", content: session.prompt },
+        parent_tool_use_id: null,
+        session_id: sessionId,
+      })
+
       console.log(`[fleet] Creating SDK query for session ${sessionId}, model=${session.model}, cwd=${workspaceDir}`)
       const q = query({
-        prompt: session.prompt,
+        prompt: inputStream,
         options: {
           cwd: workspaceDir,
           systemPrompt: { type: "preset", preset: "claude_code", append: systemPrompt },
@@ -552,6 +613,7 @@ Git credentials are pre-configured — use \`git push\` directly.
         userId,
         workspaceDir,
         query: q,
+        inputQueue,
         cliSessionId: null,
         totalCostUsd: 0,
         totalTurnsUsed: 0,
@@ -593,7 +655,7 @@ Git credentials are pre-configured — use \`git push\` directly.
   const sendFollowUp = async (sessionId: string, userId: string, text: string): Promise<void> => {
     const ctx = sessionContexts.get(sessionId)
     if (!ctx) throw new Error(`No active session context for ${sessionId}`)
-    if (!ctx.query) throw new Error(`Session ${sessionId} has no active query`)
+    if (!ctx.inputQueue) throw new Error(`Session ${sessionId} has no input queue`)
     if (activeTurns.has(sessionId)) throw new Error(`Session ${sessionId} already has a running turn`)
 
     ctx.lastActivityAt = Date.now()
@@ -616,37 +678,22 @@ Git credentials are pre-configured — use \`git push\` directly.
     })
     await sessionStore.addMessage(sessionId, "user", text)
 
-    // Inject follow-up via streamInput — the background loop handles the response
-    const userMsg = {
-      type: "user" as const,
-      message: { role: "user" as const, content: text },
+    // Push to the input queue — the background loop picks it up
+    ctx.inputQueue.push({
+      type: "user",
+      message: { role: "user", content: text },
       parent_tool_use_id: null,
       session_id: ctx.cliSessionId ?? sessionId,
-    }
-
-    try {
-      await ctx.query.streamInput((async function* () {
-        yield userMsg
-      })())
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      console.error(`[fleet] streamInput failed for ${sessionId}: ${errorMessage}`)
-      activeTurns.delete(sessionId)
-      await sessionStore.updateStatus(sessionId, "failed", {
-        result: { success: false, summary: `Follow-up failed: ${errorMessage}` },
-      })
-      wsManager.emitToSession(sessionId, userId, {
-        type: "session_update",
-        sessionId,
-        status: "failed",
-      })
-    }
+    })
   }
 
   const endSession = async (sessionId: string, userId: string): Promise<void> => {
     const ctx = sessionContexts.get(sessionId)
 
-    // Close the query if still running
+    // Close the input queue and query
+    if (ctx?.inputQueue) {
+      ctx.inputQueue.close()
+    }
     if (ctx?.query) {
       try { ctx.query.close() } catch { /* already closed */ }
     }
@@ -682,6 +729,9 @@ Git credentials are pre-configured — use \`git push\` directly.
     const ctx = sessionContexts.get(sessionId)
     if (!ctx) return false
 
+    if (ctx.inputQueue) {
+      ctx.inputQueue.close()
+    }
     if (ctx.query) {
       try { ctx.query.close() } catch { /* already closed */ }
     }
