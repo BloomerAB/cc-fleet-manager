@@ -337,6 +337,26 @@ Git credentials are pre-configured — use \`git push\` directly.
         await configureGitCredentials(workspaceDir, gitToken)
       }
 
+      // Pre-configure Claude Code settings so it doesn't prompt for permissions
+      const claudeSettingsDir = join(workspaceDir, ".claude")
+      await mkdir(claudeSettingsDir, { recursive: true })
+      await writeFile(
+        join(claudeSettingsDir, "settings.json"),
+        JSON.stringify({
+          permissions: {
+            allow: [
+              "Bash(*)",
+              "Read(*)",
+              "Write(*)",
+              "Edit(*)",
+              "WebFetch(*)",
+              "Grep(*)",
+              "Glob(*)",
+            ],
+          },
+        }),
+      )
+
       // Build system prompt with all rule layers
       const userRules = await userStore.getRules(userId)
       const systemPrompt = buildSystemPrompt(session.repoSource, availableRepos, userRules, session.rules)
@@ -354,6 +374,7 @@ Git credentials are pre-configured — use \`git push\` directly.
       // Build environment for the CLI process
       const spawnEnv: Record<string, string> = {
         ...process.env as Record<string, string>,
+        SHELL: "/bin/sh",
         GIT_CONFIG_GLOBAL: join(workspaceDir, ".gitconfig"),
       }
 
