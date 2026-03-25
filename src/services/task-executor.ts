@@ -8,7 +8,7 @@ import type { Env } from "../env.js"
 import type { SessionStore } from "./session-store.js"
 import type { UserStore } from "./user-store.js"
 import type { WsManager } from "./ws-manager.js"
-import type { RepoConfig, RepoSource, PermissionMode } from "../types/index.js"
+import type { RepoConfig, RepoSource } from "../types/index.js"
 import { minimatch } from "minimatch"
 
 const execFileAsync = promisify(execFile)
