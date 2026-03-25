@@ -292,10 +292,12 @@ Git credentials are pre-configured — use \`git push\` directly.
   /** Stream a single turn of the conversation */
   const streamTurn = async (ctx: SessionContext): Promise<void> => {
     activeTurns.add(ctx.sessionId)
+    console.log(`[fleet] streamTurn started for session ${ctx.sessionId}`)
 
     try {
       for await (const msg of ctx.query!) {
         const sdkMsg = msg as SDKMessage
+        console.log(`[fleet] SDK message: type=${sdkMsg.type}${("subtype" in sdkMsg ? ` subtype=${sdkMsg.subtype}` : "")}`)
 
         if (sdkMsg.type === "assistant") {
           const assistant = sdkMsg as SDKAssistantMessage
@@ -478,6 +480,7 @@ Git credentials are pre-configured — use \`git push\` directly.
         : session.permissionMode as "plan" | "acceptEdits"
 
       // Create the query with streaming input support
+      console.log(`[fleet] Creating SDK query for session ${sessionId}, model=${session.model}, cwd=${workspaceDir}`)
       const q = query({
         prompt: session.prompt,
         options: {

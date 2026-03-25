@@ -22,6 +22,21 @@ const main = async () => {
     logger: {
       level: "info",
     },
+    disableRequestLogging: true,
+  })
+
+  // Log only non-health requests and redact tokens from URLs
+  app.addHook("onResponse", (request, reply, done) => {
+    if (request.url.startsWith("/health")) {
+      done()
+      return
+    }
+    const url = request.url.replace(/token=[^&]+/, "token=REDACTED")
+    app.log.info(
+      { method: request.method, url, statusCode: reply.statusCode, responseTime: reply.elapsedTime },
+      "request completed",
+    )
+    done()
   })
 
   // Plugins
