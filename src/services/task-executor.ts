@@ -22,6 +22,7 @@ interface ActiveTask {
   readonly sessionId: string
   readonly userId: string
   readonly process: ChildProcess
+  killed: boolean
 }
 
 interface GhRepo {
@@ -306,7 +307,6 @@ Git credentials are pre-configured — use \`git push\` directly.
     }
 
     const workspaceDir = join(env.WORKSPACE_BASE_DIR, sessionId)
-    let killed = false
 
     try {
       await sessionStore.updateStatus(sessionId, "running")
@@ -430,7 +430,8 @@ Git credentials are pre-configured — use \`git push\` directly.
         stdio: ["ignore", "pipe", "pipe"],
       })
 
-      activeTasks.set(sessionId, { sessionId, userId, process: proc })
+      const activeTask: ActiveTask = { sessionId, userId, process: proc, killed: false }
+      activeTasks.set(sessionId, activeTask)
 
       // Collect stderr for error reporting
       let stderr = ""
@@ -443,7 +444,7 @@ Git credentials are pre-configured — use \`git push\` directly.
       const rl = createInterface({ input: proc.stdout! })
 
       for await (const line of rl) {
-        if (killed) break
+        if (activeTasks.get(sessionId)?.killed) break
 
         const actions = parseCliLine(line)
         for (const action of actions) {
@@ -505,7 +506,7 @@ Git credentials are pre-configured — use \`git push\` directly.
       })
 
       // If no result event was received and process exited non-zero, mark as failed
-      if (!gotResult && !killed) {
+      if (!gotResult && !activeTasks.get(sessionId)?.killed) {
         const errorMsg = stderr.trim() || `Process exited with code ${proc.exitCode}`
         await sessionStore.updateStatus(sessionId, "failed", {
           result: { success: false, summary: `Error: ${errorMsg}` },
@@ -523,7 +524,7 @@ Git credentials are pre-configured — use \`git push\` directly.
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      if (!killed) {
+      if (!activeTasks.get(sessionId)?.killed) {
         await sessionStore.updateStatus(sessionId, "failed", {
           result: { success: false, summary: `Error: ${errorMessage}` },
         })
@@ -548,6 +549,7 @@ Git credentials are pre-configured — use \`git push\` directly.
     const task = activeTasks.get(sessionId)
     if (!task) return false
 
+    task.killed = true
     task.process.kill("SIGTERM")
 
     // Force kill after timeout
