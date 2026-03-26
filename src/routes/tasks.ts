@@ -305,6 +305,102 @@ const registerTaskRoutes = (
     const messages = await sessionStore.getMessages(id)
     return { success: true, data: messages }
   })
+
+  // GET /api/tasks/:id/export — download session JSONL for local resume
+  app.get("/api/tasks/:id/export", async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const user = request.user as JwtPayload
+
+    const session = await sessionStore.findById(id, user.sub)
+    if (!session) {
+      return reply.status(404).send({ success: false, error: "Task not found" })
+    }
+    if (!session.cliSessionId) {
+      return reply.status(400).send({ success: false, error: "No CLI session — nothing to export" })
+    }
+
+    const { existsSync, readFileSync, readdirSync } = await import("node:fs")
+    const userProjectsDir = `/home/appuser/${user.sub}/.claude/projects`
+
+    let jsonlContent: string | null = null
+    try {
+      if (existsSync(userProjectsDir)) {
+        for (const dir of readdirSync(userProjectsDir)) {
+          const jsonlPath = `${userProjectsDir}/${dir}/${session.cliSessionId}.jsonl`
+          if (existsSync(jsonlPath)) {
+            jsonlContent = readFileSync(jsonlPath, "utf-8")
+            break
+          }
+        }
+      }
+    } catch {
+      // Best effort
+    }
+
+    if (!jsonlContent) {
+      return reply.status(404).send({ success: false, error: "Session file not found" })
+    }
+
+    return reply
+      .header("Content-Type", "application/x-ndjson")
+      .header("Content-Disposition", `attachment; filename="${session.cliSessionId}.jsonl"`)
+      .send(jsonlContent)
+  })
+
+  // POST /api/tasks/import — import a local session JSONL to Fleet
+  app.post("/api/tasks/import", async (request, reply) => {
+    const user = request.user as JwtPayload
+    const body = request.body as { jsonl: string; prompt?: string; repoSource?: unknown }
+
+    if (!body.jsonl || typeof body.jsonl !== "string") {
+      return reply.status(400).send({ success: false, error: "Missing jsonl field" })
+    }
+
+    // Parse the JSONL to extract session ID and first prompt
+    const lines = body.jsonl.trim().split("\n")
+    let cliSessionId: string | null = null
+    let firstPrompt = body.prompt ?? "Imported session"
+
+    for (const line of lines) {
+      try {
+        const record = JSON.parse(line)
+        if (record.session_id && !cliSessionId) {
+          cliSessionId = record.session_id
+        }
+        if (record.type === "user" && record.message?.content && firstPrompt === "Imported session") {
+          const content = typeof record.message.content === "string"
+            ? record.message.content
+            : JSON.stringify(record.message.content)
+          firstPrompt = content.slice(0, 200)
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+
+    if (!cliSessionId) {
+      return reply.status(400).send({ success: false, error: "Could not find session_id in JSONL" })
+    }
+
+    // Write the JSONL to the user's Claude projects dir
+    const { mkdir: mkdirAsync, writeFile: writeFileAsync } = await import("node:fs/promises")
+    const projectDir = `/home/appuser/${user.sub}/.claude/projects/imported`
+    await mkdirAsync(projectDir, { recursive: true })
+    await writeFileAsync(`${projectDir}/${cliSessionId}.jsonl`, body.jsonl)
+
+    // Create a Fleet session that can resume this
+    const repoSource = (body.repoSource as { mode: string }) ?? { mode: "direct" as const, repos: [] }
+    const newSession = await sessionStore.create({
+      userId: user.sub,
+      prompt: `[Imported] ${firstPrompt}`,
+      repoSource: repoSource as import("../types/index.js").RepoSource,
+    })
+
+    // Store the CLI session ID for resume
+    await sessionStore.updateCliSessionId(newSession.id, cliSessionId)
+
+    return { success: true, data: { id: newSession.id, cliSessionId } }
+  })
 }
 
 export { registerTaskRoutes, isRepoAllowed, parseAllowedRepos }
