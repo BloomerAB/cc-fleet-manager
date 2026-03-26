@@ -566,11 +566,15 @@ Git credentials are pre-configured — use \`git push\` directly.
         await writeFile(join(kubeDir, "config"), kubeconfig, { mode: 0o600 })
       }
 
-      // Build environment — HOME is always /home/appuser for session persistence
+      // HOME is per-user for isolation — each user gets their own ~/.claude/
+      const userHomeDir = join("/home/appuser", userId)
+      await mkdir(join(userHomeDir, ".claude"), { recursive: true })
+
       const spawnEnv: Record<string, string | undefined> = {
         ...process.env,
         SHELL: "/bin/sh",
-        HOME: "/home/appuser",
+        HOME: userHomeDir,
+        TMPDIR: workspaceDir,
         GIT_CONFIG_GLOBAL: join(workspaceDir, ".gitconfig"),
         KUBECONFIG: kubeconfig ? join(workspaceDir, ".kube", "config") : undefined,
         CLAUDE_AGENT_SDK_CLIENT_APP: "cc-fleet/0.3.0",

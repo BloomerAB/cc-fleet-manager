@@ -165,10 +165,10 @@ const registerTaskRoutes = (
       return reply.status(400).send({ success: false, error: "Session is still active" })
     }
 
-    // Check if session JSONL exists (HOME must have been /home/appuser)
+    // Check if session JSONL exists in the user's home dir
     const { existsSync } = await import("node:fs")
     const { readdirSync } = await import("node:fs")
-    const claudeProjectsDir = "/home/appuser/.claude/projects"
+    const claudeProjectsDir = `/home/appuser/${user.sub}/.claude/projects`
     let sessionFileExists = false
     try {
       if (existsSync(claudeProjectsDir)) {
