@@ -1,4 +1,7 @@
+import { existsSync } from "node:fs"
+import { join } from "node:path"
 import Fastify from "fastify"
+import fastifyStatic from "@fastify/static"
 import fastifyWebsocket from "@fastify/websocket"
 import fastifyCors from "@fastify/cors"
 import fastifyJwt from "@fastify/jwt"
@@ -65,6 +68,23 @@ const main = async () => {
   // Health checks
   app.get("/healthz", async () => ({ status: "ok" }))
   app.get("/health", async () => ({ status: "ok" }))
+
+  // Serve UI static files if present (built UI copied into /app/public)
+  const publicDir = join(import.meta.dirname, "..", "public")
+  if (existsSync(publicDir)) {
+    await app.register(fastifyStatic, {
+      root: publicDir,
+      prefix: "/",
+      wildcard: false,
+    })
+    // SPA fallback — serve index.html for non-API routes
+    app.setNotFoundHandler((request, reply) => {
+      if (request.url.startsWith("/api/") || request.url.startsWith("/ws/")) {
+        return reply.status(404).send({ success: false, error: "Not found" })
+      }
+      return reply.sendFile("index.html")
+    })
+  }
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {

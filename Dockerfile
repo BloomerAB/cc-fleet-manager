@@ -18,6 +18,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
+# UI build stage — pull pre-built UI from its image
+ARG UI_IMAGE=ghcr.io/bloomerab/cc-fleet-ui:latest
+FROM ${UI_IMAGE} AS ui-source
+
 # Runner stage (production)
 FROM node:24-alpine
 WORKDIR /app
@@ -40,6 +44,9 @@ RUN apk add --no-cache \
 COPY --from=deps-prod /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY package.json ./
+
+# Copy built UI static files
+COPY --from=ui-source /usr/share/nginx/html ./public
 
 # Ensure appuser home exists for claude credentials
 RUN mkdir -p /home/appuser/.claude && chown -R appuser:nodejs /home/appuser
