@@ -1,7 +1,15 @@
 {
   "name": "@bloomerab/cc-fleet-manager",
   "version": "0.1.0",
+  "description": "Fleet orchestration manager for running Claude Code tasks across repositories",
   "private": true,
+  "license": "MIT",
+  "author": "Bloomer AB",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BloomerAB/cc-fleet-manager.git"
+  },
+  "keywords": ["claude-code", "fleet", "task-orchestration", "ai-agents"],
   "type": "module",
   "engines": {
     "node": ">=24.0.0"

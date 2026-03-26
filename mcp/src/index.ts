@@ -84,7 +84,7 @@ server.tool(
   "fleet_configure",
   "Configure the Fleet connection. Run this first before using other Fleet tools.",
   {
-    url: z.string().describe("Fleet URL, e.g. https://fleet.bloomer.se"),
+    url: z.string().describe("Fleet URL, e.g. https://fleet.example.com"),
     token: z.string().describe("API token from Fleet Settings page"),
   },
   async ({ url, token }) => {

@@ -13,6 +13,10 @@ const MIN_BUDGET_USD = 0.01
 const MAX_BUDGET_USD = 50
 const MAX_PAGE_SIZE = 100
 const MAX_REPOS = 10
+const MAX_IMPORT_SIZE = 50 * 1024 * 1024 // 50 MB
+
+// Only allow safe path segments: alphanumeric, hyphens, underscores, dots (no slashes, .., etc.)
+const SAFE_PATH_SEGMENT = /^[a-zA-Z0-9_\-][a-zA-Z0-9_\-.]*$/
 
 const repoSchema = z.object({
   url: z.string().url(),
@@ -163,6 +167,14 @@ const registerTaskRoutes = (
     }
     if (originalSession.status === "running" || originalSession.status === "waiting_for_input") {
       return reply.status(400).send({ success: false, error: "Session is still active" })
+    }
+
+    // Validate path segment to prevent path traversal
+    if (!SAFE_PATH_SEGMENT.test(user.sub)) {
+      return reply.status(400).send({ success: false, error: "Invalid user identifier" })
+    }
+    if (!SAFE_PATH_SEGMENT.test(originalSession.cliSessionId)) {
+      return reply.status(400).send({ success: false, error: "Invalid CLI session identifier" })
     }
 
     // Check if session JSONL exists in the user's home dir
@@ -319,6 +331,14 @@ const registerTaskRoutes = (
       return reply.status(400).send({ success: false, error: "No CLI session — nothing to export" })
     }
 
+    // Validate path segments to prevent path traversal
+    if (!SAFE_PATH_SEGMENT.test(user.sub)) {
+      return reply.status(400).send({ success: false, error: "Invalid user identifier" })
+    }
+    if (!SAFE_PATH_SEGMENT.test(session.cliSessionId)) {
+      return reply.status(400).send({ success: false, error: "Invalid CLI session identifier" })
+    }
+
     const { existsSync, readFileSync, readdirSync } = await import("node:fs")
     const userProjectsDir = `/home/appuser/${user.sub}/.claude/projects`
 
@@ -350,11 +370,18 @@ const registerTaskRoutes = (
   // POST /api/tasks/import — import a local session JSONL to Fleet
   app.post("/api/tasks/import", async (request, reply) => {
     const user = request.user as JwtPayload
-    const body = request.body as { jsonl: string; prompt?: string; repoSource?: unknown }
 
-    if (!body.jsonl || typeof body.jsonl !== "string") {
-      return reply.status(400).send({ success: false, error: "Missing jsonl field" })
+    const importSchema = z.object({
+      jsonl: z.string().min(1).max(MAX_IMPORT_SIZE),
+      prompt: z.string().max(MAX_PROMPT_LENGTH).optional(),
+      repoSource: z.unknown().optional(),
+    })
+
+    const parseResult = importSchema.safeParse(request.body)
+    if (!parseResult.success) {
+      return reply.status(400).send({ success: false, error: `Invalid import body: ${parseResult.error.issues.map((i) => i.message).join(", ")}` })
     }
+    const body = parseResult.data
 
     // Parse the JSONL to extract session ID and first prompt
     const lines = body.jsonl.trim().split("\n")
@@ -380,6 +407,14 @@ const registerTaskRoutes = (
 
     if (!cliSessionId) {
       return reply.status(400).send({ success: false, error: "Could not find session_id in JSONL" })
+    }
+
+    // Validate path segments to prevent path traversal
+    if (!SAFE_PATH_SEGMENT.test(user.sub)) {
+      return reply.status(400).send({ success: false, error: "Invalid user identifier" })
+    }
+    if (!SAFE_PATH_SEGMENT.test(cliSessionId)) {
+      return reply.status(400).send({ success: false, error: "Invalid session_id in JSONL" })
     }
 
     // Write the JSONL to the user's Claude projects dir
