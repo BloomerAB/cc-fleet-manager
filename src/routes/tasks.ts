@@ -16,7 +16,7 @@ const MAX_REPOS = 10
 const MAX_IMPORT_SIZE = 50 * 1024 * 1024 // 50 MB
 
 // Only allow safe path segments: alphanumeric, hyphens, underscores, dots (no slashes, .., etc.)
-const SAFE_PATH_SEGMENT = /^[a-zA-Z0-9_\-][a-zA-Z0-9_\-.]*$/
+const SAFE_PATH_SEGMENT = /^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$/
 
 const repoSchema = z.object({
   url: z.string().url(),
