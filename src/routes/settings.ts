@@ -70,6 +70,16 @@ const registerSettingsRoutes = (app: FastifyInstance, env: Env, userStore: UserS
     await userStore.setAnthropicApiKey(user.sub, null)
     return { success: true }
   })
+
+  // POST /api/settings/api-token — generate a long-lived API token for CLI/MCP use
+  app.post("/api/settings/api-token", async (request) => {
+    const user = request.user as JwtPayload
+    const token = app.jwt.sign(
+      { sub: user.sub, login: (request.user as { login: string }).login, name: "", picture: "" },
+      { expiresIn: "365d" },
+    )
+    return { success: true, data: { token } }
+  })
 }
 
 export { registerSettingsRoutes }
