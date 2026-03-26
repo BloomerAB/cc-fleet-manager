@@ -1,0 +1,27 @@
+{
+  "name": "@bloomerab/cc-fleet-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for syncing Claude Code sessions with CC Fleet",
+  "type": "module",
+  "bin": {
+    "cc-fleet-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  },
+  "files": ["dist"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BloomerAB/cc-fleet-manager.git",
+    "directory": "mcp"
+  }
+}
