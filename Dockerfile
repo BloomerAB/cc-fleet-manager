@@ -39,6 +39,7 @@ RUN apk add --no-cache \
 
 COPY --from=deps-prod /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY pipelines ./pipelines
 COPY package.json ./
 
 # Ensure appuser home exists for claude credentials

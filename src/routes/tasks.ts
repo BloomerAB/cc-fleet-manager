@@ -225,6 +225,7 @@ const registerTaskRoutes = (
       permissionMode: originalSession.permissionMode,
       model: originalSession.model,
       maxTurns: originalSession.maxTurns,
+      pipelineId: originalSession.pipelineId ?? undefined,
     })
 
     // Execute with resume — pass the CLI session ID

@@ -355,27 +355,31 @@ Git credentials are pre-configured — use \`git push\` directly.
     if (!pipeline) return
 
     const currentStage = pipeline.stages[ctx.stageState.currentStageIndex]
-    if (currentStage) {
-      ctx.stageState.stageResults.push({
-        stageId: currentStage.id,
-        status: "completed",
-        completedAt: new Date().toISOString(),
-      })
-    }
-
     const nextIndex = ctx.stageState.currentStageIndex + 1
 
+    // Immutable state update
+    const newStageState: StageState = {
+      ...ctx.stageState,
+      currentStageIndex: nextIndex,
+      stageStartedAt: new Date().toISOString(),
+      stageResults: [
+        ...ctx.stageState.stageResults,
+        ...(currentStage ? [{
+          stageId: currentStage.id,
+          status: "completed" as const,
+          completedAt: new Date().toISOString(),
+        }] : []),
+      ],
+    }
+    ctx.stageState = newStageState
+
     if (nextIndex >= pipeline.stages.length) {
-      // All stages complete — end the session
-      await sessionStore.updateStageState(ctx.sessionId, ctx.stageState)
+      await sessionStore.updateStageState(ctx.sessionId, newStageState)
       await endSession(ctx.sessionId, ctx.userId)
       return
     }
 
-    // Move to the next stage
-    ctx.stageState.currentStageIndex = nextIndex
-    ctx.stageState.stageStartedAt = new Date().toISOString()
-    await sessionStore.updateStageState(ctx.sessionId, ctx.stageState)
+    await sessionStore.updateStageState(ctx.sessionId, newStageState)
 
     const nextStage = pipeline.stages[nextIndex]
     emitStageUpdate(ctx)
@@ -411,25 +415,30 @@ Git credentials are pre-configured — use \`git push\` directly.
     if (!pipeline) return
 
     const currentStage = pipeline.stages[ctx.stageState.currentStageIndex]
-    if (currentStage) {
-      ctx.stageState.stageResults.push({
-        stageId: currentStage.id,
-        status: "skipped",
-        completedAt: new Date().toISOString(),
-      })
-    }
-
     const nextIndex = ctx.stageState.currentStageIndex + 1
 
+    const newStageState: StageState = {
+      ...ctx.stageState,
+      currentStageIndex: nextIndex,
+      stageStartedAt: new Date().toISOString(),
+      stageResults: [
+        ...ctx.stageState.stageResults,
+        ...(currentStage ? [{
+          stageId: currentStage.id,
+          status: "skipped" as const,
+          completedAt: new Date().toISOString(),
+        }] : []),
+      ],
+    }
+    ctx.stageState = newStageState
+
     if (nextIndex >= pipeline.stages.length) {
-      await sessionStore.updateStageState(ctx.sessionId, ctx.stageState)
+      await sessionStore.updateStageState(ctx.sessionId, newStageState)
       await endSession(ctx.sessionId, ctx.userId)
       return
     }
 
-    ctx.stageState.currentStageIndex = nextIndex
-    ctx.stageState.stageStartedAt = new Date().toISOString()
-    await sessionStore.updateStageState(ctx.sessionId, ctx.stageState)
+    await sessionStore.updateStageState(ctx.sessionId, newStageState)
 
     const nextStage = pipeline.stages[nextIndex]
     emitStageUpdate(ctx)
@@ -534,18 +543,16 @@ Git credentials are pre-configured — use \`git push\` directly.
             turnsUsed: ctx.totalTurnsUsed,
           }
 
-          // Check for pipeline auto-advance
+          // Check for pipeline auto-advance — skip waiting_for_input to avoid UI flicker
           if (ctx.stageState && ctx.pipelineId) {
             const pipeline = pipelineRegistry.getById(ctx.pipelineId)
             const currentStage = pipeline?.stages[ctx.stageState.currentStageIndex]
             if (currentStage?.transition === "auto") {
-              await sessionStore.updateStatus(ctx.sessionId, "waiting_for_input", { result: turnResult })
               wsManager.emitToSession(ctx.sessionId, ctx.userId, {
                 type: "result",
                 sessionId: ctx.sessionId,
                 result: turnResult,
               })
-              // Auto-advance to next stage
               await doAdvanceStage(ctx)
               continue
             }
