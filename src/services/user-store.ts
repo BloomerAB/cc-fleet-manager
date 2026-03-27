@@ -12,6 +12,7 @@ interface User {
   readonly rules: string | null
   readonly claudeSettings: string | null
   readonly kubeconfig: string | null
+  readonly customPipelines: string | null
   readonly createdAt: Date
   readonly updatedAt: Date
 }
@@ -50,7 +51,7 @@ const createUserStore = (client: Client) => ({
 
     // Fetch to get current anthropic_api_key (preserved from previous session)
     const existing = await client.execute(
-      "SELECT anthropic_api_key, rules, claude_settings, kubeconfig FROM users WHERE id = ?",
+      "SELECT anthropic_api_key, rules, claude_settings, kubeconfig, custom_pipelines FROM users WHERE id = ?",
       [input.id],
       { prepare: true },
     )
@@ -61,6 +62,7 @@ const createUserStore = (client: Client) => ({
       rules: existing.first()?.rules ?? null,
       claudeSettings: existing.first()?.claude_settings ?? null,
       kubeconfig: existing.first()?.kubeconfig ?? null,
+      customPipelines: existing.first()?.custom_pipelines ?? null,
       createdAt: now,
       updatedAt: now,
     }
@@ -87,6 +89,7 @@ const createUserStore = (client: Client) => ({
       rules: row.rules ?? null,
       claudeSettings: row.claude_settings ?? null,
       kubeconfig: row.kubeconfig ?? null,
+      customPipelines: row.custom_pipelines ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }
@@ -170,6 +173,24 @@ const createUserStore = (client: Client) => ({
     await client.execute(
       "UPDATE users SET kubeconfig = ?, updated_at = ? WHERE id = ?",
       [kubeconfig, new Date(), userId],
+      { prepare: true },
+    )
+  },
+
+  getCustomPipelines: async (userId: string): Promise<string | null> => {
+    const result = await client.execute(
+      "SELECT custom_pipelines FROM users WHERE id = ?",
+      [userId],
+      { prepare: true },
+    )
+    const row = result.first()
+    return row?.custom_pipelines ?? null
+  },
+
+  setCustomPipelines: async (userId: string, pipelines: string | null): Promise<void> => {
+    await client.execute(
+      "UPDATE users SET custom_pipelines = ?, updated_at = ? WHERE id = ?",
+      [pipelines, new Date(), userId],
       { prepare: true },
     )
   },

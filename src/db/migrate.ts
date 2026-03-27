@@ -52,6 +52,13 @@ const migrations: readonly Migration[] = [
       "ALTER TABLE sessions ADD stage_state TEXT",
     ],
   },
+  {
+    version: 7,
+    name: "007_add_custom_pipelines",
+    statements: [
+      "ALTER TABLE users ADD custom_pipelines TEXT",
+    ],
+  },
 ]
 
 const ensureVersionTable = async (client: Client): Promise<void> => {

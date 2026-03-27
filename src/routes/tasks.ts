@@ -6,6 +6,7 @@ import type { TaskExecutor } from "../services/task-executor.js"
 import type { WsManager } from "../services/ws-manager.js"
 import type { UserStore } from "../services/user-store.js"
 import type { PipelineRegistry } from "../services/pipeline-registry.js"
+import type { PipelineDefinition } from "../types/index.js"
 import type { Env } from "../env.js"
 
 const MAX_PROMPT_LENGTH = 10000
@@ -102,9 +103,74 @@ const registerTaskRoutes = (
     }
   })
 
-  // GET /api/pipelines — list available pipelines
-  app.get("/api/pipelines", async () => {
-    return { success: true, data: pipelineRegistry.getAll() }
+  // GET /api/pipelines — list available pipelines (defaults + user custom)
+  app.get("/api/pipelines", async (request) => {
+    const user = request.user as JwtPayload
+    const defaults = pipelineRegistry.getAll()
+    const userPipelinesRaw = await userStore.getCustomPipelines(user.sub)
+    const userPipelines = userPipelinesRaw ? JSON.parse(userPipelinesRaw) as PipelineDefinition[] : []
+    return { success: true, data: [...defaults, ...userPipelines] }
+  })
+
+  // POST /api/pipelines — create or update a user pipeline
+  app.post("/api/pipelines", async (request) => {
+    const bodySchema = z.object({
+      pipeline: z.object({
+        id: z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/),
+        name: z.string().min(1).max(200),
+        description: z.string().max(1000),
+        stages: z.array(z.object({
+          id: z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/),
+          name: z.string().min(1).max(200),
+          description: z.string().max(1000),
+          systemPromptAppend: z.string().max(5000),
+          permissionMode: z.enum(["plan", "acceptEdits", "bypassPermissions"]),
+          transition: z.enum(["auto", "manual"]),
+          maxTurns: z.number().int().min(1).max(500).optional(),
+        })).min(1).max(20),
+      }),
+    })
+    const body = bodySchema.parse(request.body)
+    const user = request.user as JwtPayload
+
+    // Prevent overwriting default pipelines
+    const existing = pipelineRegistry.getById(body.pipeline.id)
+    if (existing) {
+      return { success: false, error: `Cannot overwrite default pipeline: ${body.pipeline.id}` }
+    }
+
+    const userPipelinesRaw = await userStore.getCustomPipelines(user.sub)
+    const pipelines = userPipelinesRaw ? JSON.parse(userPipelinesRaw) as PipelineDefinition[] : []
+    const idx = pipelines.findIndex((p) => p.id === body.pipeline.id)
+    const updated = idx >= 0
+      ? [...pipelines.slice(0, idx), body.pipeline, ...pipelines.slice(idx + 1)]
+      : [...pipelines, body.pipeline]
+    await userStore.setCustomPipelines(user.sub, JSON.stringify(updated))
+
+    return { success: true, data: body.pipeline }
+  })
+
+  // DELETE /api/pipelines/:id — delete a user pipeline
+  app.delete("/api/pipelines/:id", async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const user = request.user as JwtPayload
+
+    // Cannot delete default pipelines
+    const defaultPipeline = pipelineRegistry.getById(id)
+    if (defaultPipeline) {
+      return reply.status(400).send({ success: false, error: "Cannot delete a default pipeline" })
+    }
+
+    const userPipelinesRaw = await userStore.getCustomPipelines(user.sub)
+    const pipelines = userPipelinesRaw ? JSON.parse(userPipelinesRaw) as PipelineDefinition[] : []
+    const filtered = pipelines.filter((p) => p.id !== id)
+
+    if (filtered.length === pipelines.length) {
+      return reply.status(404).send({ success: false, error: "Pipeline not found" })
+    }
+
+    await userStore.setCustomPipelines(user.sub, JSON.stringify(filtered))
+    return { success: true, data: { deleted: true } }
   })
 
   // POST /api/tasks — create and execute a task
@@ -135,11 +201,16 @@ const registerTaskRoutes = (
       }
     }
 
-    // Validate pipeline if specified
+    // Validate pipeline if specified (check defaults + user custom)
     if (body.pipelineId) {
       const pipeline = pipelineRegistry.getById(body.pipelineId)
       if (!pipeline) {
-        return reply.status(400).send({ success: false, error: `Unknown pipeline: ${body.pipelineId}` })
+        const userPipelinesRaw = await userStore.getCustomPipelines(user.sub)
+        const userPipelines = userPipelinesRaw ? JSON.parse(userPipelinesRaw) as PipelineDefinition[] : []
+        const customMatch = userPipelines.find((p) => p.id === body.pipelineId)
+        if (!customMatch) {
+          return reply.status(400).send({ success: false, error: `Unknown pipeline: ${body.pipelineId}` })
+        }
       }
     }
 
