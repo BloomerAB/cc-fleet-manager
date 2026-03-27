@@ -1,37 +1,37 @@
 {
   "id": "default",
-  "name": "Plan \u2192 Code \u2192 Test \u2192 Review",
-  "description": "Full development workflow with planning, implementation, testing, and review stages",
+  "name": "Plan \u2192 Test \u2192 Code \u2192 Review",
+  "description": "TDD workflow — plan first, write tests, then implement, then review",
   "stages": [
     {
       "id": "plan",
       "name": "Plan",
       "description": "Analyze the task and create an implementation plan",
-      "systemPromptAppend": "You are in the PLANNING stage. Analyze the task, explore the codebase, and create a detailed implementation plan. Do NOT make any code changes yet. When your plan is complete, summarize it and say \"Planning complete.\"",
+      "systemPromptAppend": "You are in the PLANNING stage. Analyze the task, explore the codebase, and create a detailed implementation plan. Identify what tests need to be written. Do NOT make any code changes yet. When your plan is complete, summarize it and say \"Planning complete.\"",
       "permissionMode": "plan",
-      "transition": "auto"
-    },
-    {
-      "id": "code",
-      "name": "Code",
-      "description": "Implement the plan",
-      "systemPromptAppend": "You are in the CODING stage. Implement the plan from the previous stage. Follow the project's coding conventions. Write clean, tested code. When implementation is done, say \"Implementation complete.\"",
-      "permissionMode": "acceptEdits",
       "transition": "auto"
     },
     {
       "id": "test",
       "name": "Test",
-      "description": "Run tests and fix failures",
-      "systemPromptAppend": "You are in the TESTING stage. Run the test suite and fix any failures. Ensure adequate test coverage for your changes. When all tests pass, say \"Testing complete.\"",
+      "description": "Write tests first (TDD red phase)",
+      "systemPromptAppend": "You are in the TESTING stage (TDD red phase). Write tests FIRST based on the plan. These tests should define the expected behavior and FAIL initially — that is correct. Do not write implementation code yet. When tests are written, say \"Tests written.\"",
+      "permissionMode": "acceptEdits",
+      "transition": "auto"
+    },
+    {
+      "id": "code",
+      "name": "Code",
+      "description": "Implement to make tests pass (TDD green phase)",
+      "systemPromptAppend": "You are in the CODING stage (TDD green phase). Implement the minimum code needed to make the tests pass. Follow the project's coding conventions. Run tests to verify they pass. When all tests pass, say \"Implementation complete.\"",
       "permissionMode": "acceptEdits",
       "transition": "auto"
     },
     {
       "id": "review",
       "name": "Review",
-      "description": "Review all changes",
-      "systemPromptAppend": "You are in the REVIEW stage. Review all changes you made. Check for:\n- Code quality and style consistency\n- Missing error handling\n- Security issues\n- Missing tests\nFix any issues found. When satisfied, say \"Review complete.\"",
+      "description": "Review and refactor (TDD refactor phase)",
+      "systemPromptAppend": "You are in the REVIEW stage (TDD refactor phase). Review all changes. Refactor for clarity without changing behavior. Check for:\n- Code quality and style consistency\n- Missing error handling\n- Security issues\n- Test coverage adequacy\nRun tests after any refactoring. When satisfied, say \"Review complete.\"",
       "permissionMode": "acceptEdits",
       "transition": "manual"
     }
