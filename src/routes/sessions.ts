@@ -95,7 +95,7 @@ const registerSessionRoutes = (
           case "advance_stage": {
             const session = await sessionStore.findById(message.sessionId, user.sub)
             if (!session) break
-            taskExecutor.advanceStage(message.sessionId, user.sub).catch((error) => {
+            taskExecutor.advanceStage(message.sessionId).catch((error) => {
               app.log.error({ error, sessionId: message.sessionId }, "Advance stage failed")
             })
             break
@@ -103,7 +103,7 @@ const registerSessionRoutes = (
           case "skip_stage": {
             const session = await sessionStore.findById(message.sessionId, user.sub)
             if (!session) break
-            taskExecutor.skipStage(message.sessionId, user.sub).catch((error) => {
+            taskExecutor.skipStage(message.sessionId).catch((error) => {
               app.log.error({ error, sessionId: message.sessionId }, "Skip stage failed")
             })
             break

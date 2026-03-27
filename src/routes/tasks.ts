@@ -306,7 +306,7 @@ const registerTaskRoutes = (
     }
 
     try {
-      await taskExecutor.advanceStage(id, user.sub)
+      await taskExecutor.advanceStage(id)
       return { success: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -325,7 +325,7 @@ const registerTaskRoutes = (
     }
 
     try {
-      await taskExecutor.skipStage(id, user.sub)
+      await taskExecutor.skipStage(id)
       return { success: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

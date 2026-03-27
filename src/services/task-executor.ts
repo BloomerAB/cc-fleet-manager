@@ -984,7 +984,7 @@ Git credentials are pre-configured — use \`git push\` directly.
     idleCheckTimer.unref()
   }
 
-  const advanceStage = async (sessionId: string, userId: string): Promise<void> => {
+  const advanceStage = async (sessionId: string): Promise<void> => {
     const ctx = sessionContexts.get(sessionId)
     if (!ctx) throw new Error(`No active session context for ${sessionId}`)
     if (!ctx.stageState || !ctx.pipelineId) throw new Error(`Session ${sessionId} has no active pipeline`)
@@ -993,7 +993,7 @@ Git credentials are pre-configured — use \`git push\` directly.
     await doAdvanceStage(ctx)
   }
 
-  const skipStage = async (sessionId: string, userId: string): Promise<void> => {
+  const skipStage = async (sessionId: string): Promise<void> => {
     const ctx = sessionContexts.get(sessionId)
     if (!ctx) throw new Error(`No active session context for ${sessionId}`)
     if (!ctx.stageState || !ctx.pipelineId) throw new Error(`Session ${sessionId} has no active pipeline`)
