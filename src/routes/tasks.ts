@@ -5,6 +5,7 @@ import type { SessionStore } from "../services/session-store.js"
 import type { TaskExecutor } from "../services/task-executor.js"
 import type { WsManager } from "../services/ws-manager.js"
 import type { UserStore } from "../services/user-store.js"
+import type { PipelineRegistry } from "../services/pipeline-registry.js"
 import type { Env } from "../env.js"
 
 const MAX_PROMPT_LENGTH = 10000
@@ -54,6 +55,7 @@ const createTaskSchema = z.object({
   model: z.enum(["sonnet", "opus"]).optional(),
   maxTurns: z.number().int().min(1).max(MAX_TURNS_LIMIT).optional(),
   maxBudgetUsd: z.number().min(MIN_BUDGET_USD).max(MAX_BUDGET_USD).optional(),
+  pipelineId: z.string().min(1).optional(),
 })
 
 const listQuerySchema = z.object({
@@ -85,18 +87,24 @@ const registerTaskRoutes = (
   userStore: UserStore,
   taskExecutor: TaskExecutor,
   wsManager: WsManager,
+  pipelineRegistry: PipelineRegistry,
 ) => {
   const allowedRepos = parseAllowedRepos(env.ALLOWED_REPOS)
 
-  // Auth hook for all task routes
+  // Auth hook for all task and pipeline routes
   app.addHook("onRequest", async (request, reply) => {
-    if (request.url.startsWith("/api/tasks")) {
+    if (request.url.startsWith("/api/tasks") || request.url.startsWith("/api/pipelines")) {
       try {
         await request.jwtVerify()
       } catch {
         return reply.status(401).send({ success: false, error: "Unauthorized" })
       }
     }
+  })
+
+  // GET /api/pipelines — list available pipelines
+  app.get("/api/pipelines", async () => {
+    return { success: true, data: pipelineRegistry.getAll() }
   })
 
   // POST /api/tasks — create and execute a task
@@ -127,6 +135,14 @@ const registerTaskRoutes = (
       }
     }
 
+    // Validate pipeline if specified
+    if (body.pipelineId) {
+      const pipeline = pipelineRegistry.getById(body.pipelineId)
+      if (!pipeline) {
+        return reply.status(400).send({ success: false, error: `Unknown pipeline: ${body.pipelineId}` })
+      }
+    }
+
     const session = await sessionStore.create({
       userId: user.sub,
       prompt: body.prompt,
@@ -136,6 +152,7 @@ const registerTaskRoutes = (
       model: body.model,
       maxTurns: body.maxTurns,
       maxBudgetUsd: body.maxBudgetUsd,
+      pipelineId: body.pipelineId,
     })
 
     // Notify dashboards
@@ -276,6 +293,44 @@ const registerTaskRoutes = (
     })
 
     return { success: true, data: { cancelled: true } }
+  })
+
+  // POST /api/tasks/:id/advance-stage — manually advance to the next pipeline stage
+  app.post("/api/tasks/:id/advance-stage", async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const user = request.user as JwtPayload
+
+    const session = await sessionStore.findById(id, user.sub)
+    if (!session) {
+      return reply.status(404).send({ success: false, error: "Task not found" })
+    }
+
+    try {
+      await taskExecutor.advanceStage(id, user.sub)
+      return { success: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return reply.status(400).send({ success: false, error: message })
+    }
+  })
+
+  // POST /api/tasks/:id/skip-stage — skip the current pipeline stage
+  app.post("/api/tasks/:id/skip-stage", async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const user = request.user as JwtPayload
+
+    const session = await sessionStore.findById(id, user.sub)
+    if (!session) {
+      return reply.status(404).send({ success: false, error: "Task not found" })
+    }
+
+    try {
+      await taskExecutor.skipStage(id, user.sub)
+      return { success: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return reply.status(400).send({ success: false, error: message })
+    }
   })
 
   // DELETE /api/tasks/:id — delete a session

@@ -38,12 +38,24 @@ const dashboardEndSessionSchema = z.object({
   sessionId: z.string(),
 })
 
+const dashboardAdvanceStageSchema = z.object({
+  type: z.literal("advance_stage"),
+  sessionId: z.string(),
+})
+
+const dashboardSkipStageSchema = z.object({
+  type: z.literal("skip_stage"),
+  sessionId: z.string(),
+})
+
 const dashboardMessageSchema = z.discriminatedUnion("type", [
   dashboardSubscribeSchema,
   dashboardAnswerSchema,
   dashboardCancelSchema,
   dashboardFollowUpSchema,
   dashboardEndSessionSchema,
+  dashboardAdvanceStageSchema,
+  dashboardSkipStageSchema,
 ])
 
 const createWsManager = () => {

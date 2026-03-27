@@ -44,6 +44,14 @@ const migrations: readonly Migration[] = [
       "ALTER TABLE users ADD kubeconfig TEXT",
     ],
   },
+  {
+    version: 6,
+    name: "006_add_pipeline_stage",
+    statements: [
+      "ALTER TABLE sessions ADD pipeline_id TEXT",
+      "ALTER TABLE sessions ADD stage_state TEXT",
+    ],
+  },
 ]
 
 const ensureVersionTable = async (client: Client): Promise<void> => {

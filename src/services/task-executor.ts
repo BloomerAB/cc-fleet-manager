@@ -8,7 +8,8 @@ import type { Env } from "../env.js"
 import type { SessionStore } from "./session-store.js"
 import type { UserStore } from "./user-store.js"
 import type { WsManager } from "./ws-manager.js"
-import type { RepoConfig, RepoSource } from "../types/index.js"
+import type { RepoConfig, RepoSource, StageState } from "../types/index.js"
+import type { PipelineRegistry } from "./pipeline-registry.js"
 import { minimatch } from "minimatch"
 
 const execFileAsync = promisify(execFile)
@@ -78,6 +79,8 @@ interface SessionContext {
   totalCostUsd: number
   totalTurnsUsed: number
   lastActivityAt: number
+  pipelineId: string | null
+  stageState: StageState | null
 }
 
 interface GhRepo {
@@ -96,6 +99,7 @@ const createTaskExecutor = (
   sessionStore: SessionStore,
   userStore: UserStore,
   wsManager: WsManager,
+  pipelineRegistry: PipelineRegistry,
 ) => {
   const sessionContexts = new Map<string, SessionContext>()
   const activeTurns = new Set<string>()
@@ -320,6 +324,138 @@ Git credentials are pre-configured — use \`git push\` directly.
     }
   }
 
+  /** Emit a stage_update message to the dashboard */
+  const emitStageUpdate = (ctx: SessionContext): void => {
+    if (!ctx.stageState || !ctx.pipelineId) return
+
+    const pipeline = pipelineRegistry.getById(ctx.pipelineId)
+    if (!pipeline) return
+
+    const stage = pipeline.stages[ctx.stageState.currentStageIndex]
+    if (!stage) return
+
+    wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+      type: "stage_update",
+      sessionId: ctx.sessionId,
+      stageState: ctx.stageState,
+      currentStage: {
+        id: stage.id,
+        name: stage.name,
+        description: stage.description,
+        transition: stage.transition,
+      },
+    })
+  }
+
+  /** Advance to the next pipeline stage (internal) */
+  const doAdvanceStage = async (ctx: SessionContext): Promise<void> => {
+    if (!ctx.stageState || !ctx.pipelineId || !ctx.inputQueue) return
+
+    const pipeline = pipelineRegistry.getById(ctx.pipelineId)
+    if (!pipeline) return
+
+    const currentStage = pipeline.stages[ctx.stageState.currentStageIndex]
+    if (currentStage) {
+      ctx.stageState.stageResults.push({
+        stageId: currentStage.id,
+        status: "completed",
+        completedAt: new Date().toISOString(),
+      })
+    }
+
+    const nextIndex = ctx.stageState.currentStageIndex + 1
+
+    if (nextIndex >= pipeline.stages.length) {
+      // All stages complete — end the session
+      await sessionStore.updateStageState(ctx.sessionId, ctx.stageState)
+      await endSession(ctx.sessionId, ctx.userId)
+      return
+    }
+
+    // Move to the next stage
+    ctx.stageState.currentStageIndex = nextIndex
+    ctx.stageState.stageStartedAt = new Date().toISOString()
+    await sessionStore.updateStageState(ctx.sessionId, ctx.stageState)
+
+    const nextStage = pipeline.stages[nextIndex]
+    emitStageUpdate(ctx)
+
+    // Push a stage transition message to resume the SDK turn
+    const stageMessage = nextStage.systemPromptAppend
+      ? `[Stage transition: now entering "${nextStage.name}" stage]\n\n${nextStage.systemPromptAppend}\n\nContinue with the task.`
+      : `[Stage transition: now entering "${nextStage.name}" stage]\n\nContinue with the task.`
+
+    ctx.lastActivityAt = Date.now()
+    activeTurns.add(ctx.sessionId)
+
+    await sessionStore.updateStatus(ctx.sessionId, "running")
+    wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+      type: "session_update",
+      sessionId: ctx.sessionId,
+      status: "running",
+    })
+
+    ctx.inputQueue.push({
+      type: "user",
+      message: { role: "user", content: stageMessage },
+      parent_tool_use_id: null,
+      session_id: ctx.cliSessionId ?? ctx.sessionId,
+    })
+  }
+
+  /** Skip the current pipeline stage (internal) */
+  const doSkipStage = async (ctx: SessionContext): Promise<void> => {
+    if (!ctx.stageState || !ctx.pipelineId || !ctx.inputQueue) return
+
+    const pipeline = pipelineRegistry.getById(ctx.pipelineId)
+    if (!pipeline) return
+
+    const currentStage = pipeline.stages[ctx.stageState.currentStageIndex]
+    if (currentStage) {
+      ctx.stageState.stageResults.push({
+        stageId: currentStage.id,
+        status: "skipped",
+        completedAt: new Date().toISOString(),
+      })
+    }
+
+    const nextIndex = ctx.stageState.currentStageIndex + 1
+
+    if (nextIndex >= pipeline.stages.length) {
+      await sessionStore.updateStageState(ctx.sessionId, ctx.stageState)
+      await endSession(ctx.sessionId, ctx.userId)
+      return
+    }
+
+    ctx.stageState.currentStageIndex = nextIndex
+    ctx.stageState.stageStartedAt = new Date().toISOString()
+    await sessionStore.updateStageState(ctx.sessionId, ctx.stageState)
+
+    const nextStage = pipeline.stages[nextIndex]
+    emitStageUpdate(ctx)
+
+    const stageMessage = nextStage.systemPromptAppend
+      ? `[Stage transition: skipped previous stage, now entering "${nextStage.name}" stage]\n\n${nextStage.systemPromptAppend}\n\nContinue with the task.`
+      : `[Stage transition: skipped previous stage, now entering "${nextStage.name}" stage]\n\nContinue with the task.`
+
+    ctx.lastActivityAt = Date.now()
+    activeTurns.add(ctx.sessionId)
+
+    await sessionStore.updateStatus(ctx.sessionId, "running")
+    wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+      type: "session_update",
+      sessionId: ctx.sessionId,
+      status: "running",
+    })
+
+    ctx.inputQueue.push({
+      type: "user",
+      message: { role: "user", content: stageMessage },
+      parent_tool_use_id: null,
+      session_id: ctx.cliSessionId ?? ctx.sessionId,
+    })
+  }
+
   /** Extract text content from SDK assistant messages */
   const extractTextFromMessage = (msg: SDKAssistantMessage): { text: string; toolBlocks: { name: string; input: string }[] } => {
     let text = ""
@@ -388,7 +524,7 @@ Git credentials are pre-configured — use \`git push\` directly.
             sessionStore.updateCliSessionId(ctx.sessionId, result.session_id).catch(() => {})
           }
 
-          // Turn completed — signal waiting_for_input
+          // Turn completed
           ctx.lastActivityAt = Date.now()
           activeTurns.delete(ctx.sessionId)
           const turnResult = {
@@ -397,6 +533,25 @@ Git credentials are pre-configured — use \`git push\` directly.
             costUsd: ctx.totalCostUsd,
             turnsUsed: ctx.totalTurnsUsed,
           }
+
+          // Check for pipeline auto-advance
+          if (ctx.stageState && ctx.pipelineId) {
+            const pipeline = pipelineRegistry.getById(ctx.pipelineId)
+            const currentStage = pipeline?.stages[ctx.stageState.currentStageIndex]
+            if (currentStage?.transition === "auto") {
+              await sessionStore.updateStatus(ctx.sessionId, "waiting_for_input", { result: turnResult })
+              wsManager.emitToSession(ctx.sessionId, ctx.userId, {
+                type: "result",
+                sessionId: ctx.sessionId,
+                result: turnResult,
+              })
+              // Auto-advance to next stage
+              await doAdvanceStage(ctx)
+              continue
+            }
+          }
+
+          // No auto-advance — signal waiting_for_input
           await sessionStore.updateStatus(ctx.sessionId, "waiting_for_input", { result: turnResult })
           wsManager.emitToSession(ctx.sessionId, ctx.userId, {
             type: "session_update",
@@ -408,6 +563,11 @@ Git credentials are pre-configured — use \`git push\` directly.
             sessionId: ctx.sessionId,
             result: turnResult,
           })
+
+          // Emit stage info if pipeline is active
+          if (ctx.stageState && ctx.pipelineId) {
+            emitStageUpdate(ctx)
+          }
         } else if (sdkMsg.type === "system" && "subtype" in sdkMsg && sdkMsg.subtype === "init") {
           wsManager.emitToSession(ctx.sessionId, ctx.userId, {
             type: "output",
@@ -626,9 +786,20 @@ Git credentials are pre-configured — use \`git push\` directly.
       } else {
         // New session: push the initial prompt
         console.log(`[fleet] Creating SDK query for session ${sessionId}, model=${session.model}, cwd=${workspaceDir}`)
+
+        // If pipeline is active, prepend the first stage's system prompt
+        let initialPrompt = session.prompt
+        if (session.pipelineId) {
+          const pipeline = pipelineRegistry.getById(session.pipelineId)
+          const firstStage = pipeline?.stages[0]
+          if (firstStage?.systemPromptAppend) {
+            initialPrompt = `${firstStage.systemPromptAppend}\n\n---\n\nTask: ${session.prompt}`
+          }
+        }
+
         inputQueue.push({
           type: "user",
-          message: { role: "user", content: session.prompt },
+          message: { role: "user", content: initialPrompt },
           parent_tool_use_id: null,
           session_id: sessionId,
         })
@@ -636,6 +807,21 @@ Git credentials are pre-configured — use \`git push\` directly.
           prompt: inputStream,
           options: sdkOptions,
         })
+      }
+
+      // Initialize pipeline stage state if pipelineId is set
+      let stageState: StageState | null = null
+      if (session.pipelineId) {
+        const pipeline = pipelineRegistry.getById(session.pipelineId)
+        if (pipeline) {
+          stageState = {
+            pipelineId: session.pipelineId,
+            currentStageIndex: 0,
+            stageResults: [],
+            stageStartedAt: new Date().toISOString(),
+          }
+          await sessionStore.updateStageState(sessionId, stageState)
+        }
       }
 
       // Create session context
@@ -649,6 +835,8 @@ Git credentials are pre-configured — use \`git push\` directly.
         totalCostUsd: 0,
         totalTurnsUsed: 0,
         lastActivityAt: Date.now(),
+        pipelineId: session.pipelineId ?? null,
+        stageState,
       }
       sessionContexts.set(sessionId, ctx)
 
@@ -796,12 +984,32 @@ Git credentials are pre-configured — use \`git push\` directly.
     idleCheckTimer.unref()
   }
 
+  const advanceStage = async (sessionId: string, userId: string): Promise<void> => {
+    const ctx = sessionContexts.get(sessionId)
+    if (!ctx) throw new Error(`No active session context for ${sessionId}`)
+    if (!ctx.stageState || !ctx.pipelineId) throw new Error(`Session ${sessionId} has no active pipeline`)
+    if (activeTurns.has(sessionId)) throw new Error(`Session ${sessionId} has a running turn — wait for it to complete`)
+
+    await doAdvanceStage(ctx)
+  }
+
+  const skipStage = async (sessionId: string, userId: string): Promise<void> => {
+    const ctx = sessionContexts.get(sessionId)
+    if (!ctx) throw new Error(`No active session context for ${sessionId}`)
+    if (!ctx.stageState || !ctx.pipelineId) throw new Error(`Session ${sessionId} has no active pipeline`)
+    if (activeTurns.has(sessionId)) throw new Error(`Session ${sessionId} has a running turn — wait for it to complete`)
+
+    await doSkipStage(ctx)
+  }
+
   return {
     executeTask,
     sendFollowUp,
     endSession,
     cancelTask,
     killAllTasks,
+    advanceStage,
+    skipStage,
     getActiveCount: () => sessionContexts.size,
   }
 }

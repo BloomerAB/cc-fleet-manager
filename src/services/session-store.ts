@@ -1,6 +1,6 @@
 import { types as cassandraTypes } from "cassandra-driver"
 import type { Client } from "cassandra-driver"
-import type { SessionStatus, SessionResult, RepoSource, RepoConfig, PermissionMode, ModelChoice } from "../types/index.js"
+import type { SessionStatus, SessionResult, RepoSource, RepoConfig, PermissionMode, ModelChoice, StageState } from "../types/index.js"
 
 interface CreateSessionInput {
   readonly userId: string
@@ -11,6 +11,8 @@ interface CreateSessionInput {
   readonly model?: ModelChoice
   readonly maxTurns?: number
   readonly maxBudgetUsd?: number
+  readonly pipelineId?: string
+  readonly stageState?: StageState
 }
 
 interface Session {
@@ -28,6 +30,8 @@ interface Session {
   readonly maxBudgetUsd: number
   readonly deadlineSeconds: number
   readonly result: SessionResult | null
+  readonly pipelineId: string | null
+  readonly stageState: StageState | null
   readonly createdAt: Date
   readonly updatedAt: Date
   readonly startedAt: Date | null
@@ -59,6 +63,17 @@ const parseRepoSource = (raw: string | null | undefined): RepoSource => {
   return { mode: "direct", repos: [] }
 }
 
+const parseStageState = (raw: string | null | undefined): StageState | null => {
+  if (raw) {
+    try {
+      return JSON.parse(raw) as StageState
+    } catch {
+      // fallback
+    }
+  }
+  return null
+}
+
 const rowToSession = (row: cassandraTypes.Row): Session => ({
   id: row.id.toString(),
   userId: row.user_id,
@@ -74,6 +89,8 @@ const rowToSession = (row: cassandraTypes.Row): Session => ({
   maxBudgetUsd: row.max_budget_usd,
   deadlineSeconds: row.deadline_seconds,
   result: row.result ? JSON.parse(row.result) : null,
+  pipelineId: row.pipeline_id ?? null,
+  stageState: parseStageState(row.stage_state),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   startedAt: row.started_at ?? null,
@@ -99,18 +116,22 @@ const createSessionStore = (client: Client) => ({
     const permissionMode = input.permissionMode ?? "acceptEdits"
     const model = input.model ?? "sonnet"
 
+    const pipelineId = input.pipelineId ?? null
+    const stageState = input.stageState ?? null
+
     await client.execute(
       `INSERT INTO sessions (
         user_id, id, status, prompt, repo_source, repos, rules,
-        permission_mode, model,
+        permission_mode, model, pipeline_id, stage_state,
         max_turns, max_budget_usd, deadline_seconds, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.userId, id, "queued", input.prompt,
         JSON.stringify(input.repoSource),
         JSON.stringify(initialRepos),
         input.rules ?? null,
         permissionMode, model,
+        pipelineId, stageState ? JSON.stringify(stageState) : null,
         maxTurns, maxBudgetUsd, DEFAULT_DEADLINE_SECONDS, now, now,
       ],
       { prepare: true },
@@ -131,6 +152,8 @@ const createSessionStore = (client: Client) => ({
       maxBudgetUsd,
       deadlineSeconds: DEFAULT_DEADLINE_SECONDS,
       result: null,
+      pipelineId,
+      stageState,
       createdAt: now,
       updatedAt: now,
       startedAt: null,
@@ -280,6 +303,22 @@ const createSessionStore = (client: Client) => ({
       { prepare: true },
     )
     return result.rows.map(rowToMessage)
+  },
+
+  updateStageState: async (sessionId: string, stageState: StageState): Promise<void> => {
+    const session = await client.execute(
+      "SELECT user_id, created_at FROM sessions WHERE id = ?",
+      [cassandraTypes.Uuid.fromString(sessionId)],
+      { prepare: true },
+    )
+    const row = session.first()
+    if (!row) return
+
+    await client.execute(
+      "UPDATE sessions SET stage_state = ?, updated_at = ? WHERE user_id = ? AND created_at = ? AND id = ?",
+      [JSON.stringify(stageState), new Date(), row.user_id, row.created_at, cassandraTypes.Uuid.fromString(sessionId)],
+      { prepare: true },
+    )
   },
 })
 

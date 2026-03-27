@@ -1,0 +1,15 @@
+{
+  "id": "simple",
+  "name": "Simple",
+  "description": "Single stage \u2014 Claude works freely without structured stages",
+  "stages": [
+    {
+      "id": "work",
+      "name": "Work",
+      "description": "Complete the task",
+      "systemPromptAppend": "",
+      "permissionMode": "acceptEdits",
+      "transition": "manual"
+    }
+  ]
+}

@@ -18,10 +18,13 @@ export type {
   DashboardOutputMessage,
   DashboardQuestionMessage,
   DashboardResultMessage,
+  DashboardStageUpdate,
   DashboardToManagerMessage,
   DashboardAnswerMessage,
   DashboardCancelMessage,
   DashboardSubscribeMessage,
+  DashboardAdvanceStageMessage,
+  DashboardSkipStageMessage,
   Question,
   QuestionOption,
   SdkMessage,
@@ -40,3 +43,10 @@ export type {
   GitHubOrg,
   GitHubRepo,
 } from "./api.js"
+
+export type {
+  StageDefinition,
+  PipelineDefinition,
+  StageState,
+  StageResult,
+} from "./pipeline.js"

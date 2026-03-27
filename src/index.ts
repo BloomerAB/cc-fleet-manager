@@ -14,6 +14,7 @@ import { registerTaskRoutes } from "./routes/tasks.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
 import { registerSettingsRoutes } from "./routes/settings.js"
 import { registerGitHubRoutes } from "./routes/github.js"
+import { createPipelineRegistry } from "./services/pipeline-registry.js"
 
 const main = async () => {
   const env = loadEnv()
@@ -53,11 +54,12 @@ const main = async () => {
   const sessionStore = createSessionStore(db.client)
   const userStore = createUserStore(db.client)
   const wsManager = createWsManager()
-  const taskExecutor = createTaskExecutor(env, sessionStore, userStore, wsManager)
+  const pipelineRegistry = createPipelineRegistry()
+  const taskExecutor = createTaskExecutor(env, sessionStore, userStore, wsManager, pipelineRegistry)
 
   // Routes
   registerAuthRoutes(app, env, userStore)
-  registerTaskRoutes(app, env, sessionStore, userStore, taskExecutor, wsManager)
+  registerTaskRoutes(app, env, sessionStore, userStore, taskExecutor, wsManager, pipelineRegistry)
   registerSessionRoutes(app, wsManager, sessionStore, taskExecutor)
   registerSettingsRoutes(app, env, userStore)
   registerGitHubRoutes(app, userStore)
